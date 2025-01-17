@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"encoding"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -8,6 +9,11 @@ import (
 	"unicode/utf8"
 )
 
+// PERF: consider having the packet own a buf, and writing pointers into it
+// for the various types for easy access, or functions to decode things on the fly
+// this one is non obvious since a lot of the data has headers and stuff for indicating
+// length and whatnot (and im not even sure if you can do it), so either way we will want
+// to do some extensive profiling on both options
 type Packet struct {
 	fh    fixedHeader
 	props Properties
@@ -129,7 +135,7 @@ func (p *Packet) Zero() {
 
 const multMax uint32 = 128 * 128 * 128
 
-var MalVarByteInt = errors.New("Malformed variable byte integer")
+var InvalidVarByteInt = errors.New("Invalid variable byte integer")
 
 func decodeVarByteInt(data []byte) (uint32, int, error) {
 	var mult uint32 = 0
@@ -138,7 +144,7 @@ func decodeVarByteInt(data []byte) (uint32, int, error) {
 	i := 0
 	for {
 		if mult > multMax {
-			return 0, 0, MalVarByteInt
+			return 0, 0, InvalidVarByteInt
 		}
 
 		b := data[i]
@@ -177,13 +183,153 @@ func decodeUtf8(data []byte) (string, int, error) {
 	return str.String(), l, nil
 }
 
+func decodeBinary(data []byte, buf []byte) int {
+	l := binary.BigEndian.Uint16(data[0:2])
+	buf = append(buf, data[2:l+2]...)
+	return int(l) + 2
+}
+
+var MalProps = errors.New("Malformed properties")
+var InvalidPropId = errors.New("Invalid property identifier")
+
 func decodeProps(props *Properties, data []byte) (int, error) {
 	// TODO:
 	l, offset, err := decodeVarByteInt(data)
 	if err != nil {
-
+		return offset, fmt.Errorf("%v: %v", MalProps, err)
 	}
-	return 0, nil
+	end := offset + int(l)
+	for offset < end {
+		switch data[offset] {
+		case 1: // payload format indicator
+			props.pfi = data[offset+1]
+			offset += 2
+		case 2: // message expiry interval
+			props.mei = binary.BigEndian.Uint32(data[offset+1 : offset+5])
+			offset += 5
+		case 3: // content type
+			str, off, err := decodeUtf8(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.ct = str
+			offset += off + 1
+		case 8: // response topic
+			str, off, err := decodeUtf8(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.rt = str
+			offset += off + 1
+		case 9: // correlation data
+			off := decodeBinary(data[offset+1:], props.cd)
+			offset += off + 1
+		case 11: // subscription identifier
+			si, off, err := decodeVarByteInt(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			offset += off + 1
+			props.si = si
+		case 17: // session expiry interval
+			props.sei = binary.BigEndian.Uint32(data[offset+1 : offset+5])
+			offset += 5
+		case 18: // assigned client identifier
+			str, off, err := decodeUtf8(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.aci = str
+			offset += off + 1
+		case 19: // server keep alive
+			props.ska = binary.BigEndian.Uint16(data[offset+1 : offset+3])
+			offset += 3
+		case 21: // authentication method
+			str, off, err := decodeUtf8(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.am = str
+			offset += off + 1
+		case 22: // authentication data
+			off := decodeBinary(data[offset+1:], props.ad)
+			offset += off + 1
+		case 23: // request problem information
+			props.rpi = data[offset+1]
+			offset += 2
+		case 24: // will delay interval
+			props.wdi = binary.BigEndian.Uint32(data[offset+1 : offset+5])
+			offset += 5
+		case 25: // request response information
+			props.rri = data[offset+1]
+			offset += 2
+		case 26: // response information
+			str, off, err := decodeUtf8(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.ri = str
+			offset += off + 1
+		case 28: // server reference
+			str, off, err := decodeUtf8(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.sr = str
+			offset += off + 1
+		case 31: // reason string
+			str, off, err := decodeUtf8(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.rs = str
+			offset += off + 1
+		case 33: // receive maximum
+			props.rm = binary.BigEndian.Uint16(data[offset+1 : offset+3])
+			offset += 3
+		case 34: // topic alias maximum
+			props.tam = binary.BigEndian.Uint16(data[offset+1 : offset+3])
+			offset += 3
+		case 35: // topic alias
+			props.ta = binary.BigEndian.Uint16(data[offset+1 : offset+3])
+			offset += 3
+		case 36: // maximum QoS
+			props.mq = data[offset+1]
+			offset += 2
+		case 37: // retain available
+			props.ra = data[offset+1]
+			offset += 2
+		case 38: // user property
+			nameStr, off, err := decodeUtf8(data[offset+1:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.up.name = nameStr
+			offset += off + 1
+			valStr, off, err := decodeUtf8(data[offset:])
+			if err != nil {
+				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			}
+			props.up.val = valStr
+			offset += off + 1
+		case 39: // maximum packet size
+			props.mps = binary.BigEndian.Uint32(data[offset+1 : offset+5])
+			offset += 5
+		case 40: // wildcard subscription available
+			props.wsa = data[offset+1]
+			offset += 2
+		case 41: // subscription identifier available
+			props.sia = data[offset+1]
+			offset += 2
+		case 42: // shared subscription available
+			props.ssa = data[offset+1]
+			offset += 2
+		default:
+			return offset, fmt.Errorf("%v: %v", MalProps)
+		}
+	}
+
+	return offset, nil
 }
 
 var UnsupProtoc = errors.New("Unsupported protocol")
@@ -192,7 +338,6 @@ var MalConnPacket = errors.New("Malformed connect packet")
 
 // expects data to start at variable header
 func decodeConnect(p *Packet, data []byte) error {
-	// TODO:
 	protocolName, offset, err := decodeUtf8(data)
 	if err != nil {
 		return fmt.Errorf("%v: %v", MalConnPacket, err)
@@ -212,9 +357,15 @@ func decodeConnect(p *Packet, data []byte) error {
 		return fmt.Errorf("%v: reserved flag is 1")
 	}
 
-	keepAlive := binary.BigEndian.Uint16(rest[2:])
+	keepAlive := binary.BigEndian.Uint16(rest[2:4])
 
-	err = decodeProps(&p.props, rest[4:])
+	offset, err = decodeProps(&p.props, rest[4:])
+	if err != nil {
+		return fmt.Errorf("%v: %v", MalConnPacket, err)
+	}
+
+	rest = rest[offset:]
+	// TODO: decode payload
 
 	return nil
 }
