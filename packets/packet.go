@@ -3,6 +3,9 @@
  TODO:
  - try to implement things with copy wherever possible
  - figure out what we want to do about reseting strings
+   (kinda thinking we should just use a byte slice
+    or maybe there's some helpful stuff in the standard lib)
+ - extract out some common functionality for props
 
 */
 
@@ -42,6 +45,43 @@ const (
 	DISCONNECT
 	AUTH
 )
+
+func (pt PacketType) String() string {
+	switch pt {
+	case Reserved:
+		return "Reserved"
+	case CONNECT:
+		return "Connect"
+	case CONNACK:
+		return "Connack"
+	case PUBLISH:
+		return "Publish"
+	case PUBACK:
+		return "Puback"
+	case PUBREL:
+		return "Pubrel"
+	case PUBCOMP:
+		return "Pubcomp"
+	case SUBSCRIBE:
+		return "Subscribe"
+	case SUBACK:
+		return "Suback"
+	case UNSUBSCRIBE:
+		return "Unsubscribe"
+	case UNSUBACK:
+		return "Unsuback"
+	case PINGREQ:
+		return "Pingreq"
+	case PINGRESP:
+		return "Pingresp"
+	case DISCONNECT:
+		return "Disconnect"
+	case AUTH:
+		return "Auth"
+	default:
+		return "Invalid packet type"
+	}
+}
 
 type StringPair struct {
 	name string
@@ -102,171 +142,31 @@ func DecodeFixedHeader(fh *FixedHeader, data []byte) (int, error) {
 	fh.Pt = PacketType(data[0] >> 4)
 	fh.Flags = data[0] & 0b00001111
 
-	remLen, offest, err := decodeVarByteInt(data[1:])
+	remLen, offset, err := decodeVarByteInt(data[1:])
 	fh.RemLen = remLen
 
 	if err != nil {
-		return offest, fmt.Errorf("Malformed fixed header: %v", err)
+		return offset + 1, fmt.Errorf("Malformed fixed header: %v", err)
 	}
 
-	return offest, nil
+	return offset + 1, nil
 }
 
 var MalProps = errors.New("Malformed properties")
 var InvalidPropId = errors.New("Invalid property identifier")
-
-func decodeProps(props *Properties, data []byte) (int, error) {
-	// TODO:
-	l, offset, err := decodeVarByteInt(data)
-	if err != nil {
-		return offset, fmt.Errorf("%v: %v", MalProps, err)
-	}
-	end := offset + int(l)
-	for offset < end {
-		switch data[offset] {
-		case 1: // payload format indicator
-			props.pfi = data[offset+1]
-			offset += 2
-		case 2: // message expiry interval
-			props.mei = binary.BigEndian.Uint32(data[offset+1 : offset+5])
-			offset += 5
-		case 3: // content type
-			str, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.ct = str
-			offset += off + 1
-		case 8: // response topic
-			str, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.rt = str
-			offset += off + 1
-		case 9: // correlation data
-			off := decodeBinary(data[offset+1:], props.cd)
-			offset += off + 1
-		case 11: // subscription identifier
-			si, off, err := decodeVarByteInt(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			offset += off + 1
-			props.si = si
-		case 17: // session expiry interval
-			props.sei = binary.BigEndian.Uint32(data[offset+1 : offset+5])
-			offset += 5
-		case 18: // assigned client identifier
-			str, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.aci = str
-			offset += off + 1
-		case 19: // server keep alive
-			props.ska = binary.BigEndian.Uint16(data[offset+1 : offset+3])
-			offset += 3
-		case 21: // authentication method
-			str, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.am = str
-			offset += off + 1
-		case 22: // authentication data
-			off := decodeBinary(data[offset+1:], props.ad)
-			offset += off + 1
-		case 23: // request problem information
-			props.rpi = data[offset+1]
-			offset += 2
-		case 24: // will delay interval
-			props.wdi = binary.BigEndian.Uint32(data[offset+1 : offset+5])
-			offset += 5
-		case 25: // request response information
-			props.rri = data[offset+1]
-			offset += 2
-		case 26: // response information
-			str, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.ri = str
-			offset += off + 1
-		case 28: // server reference
-			str, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.sr = str
-			offset += off + 1
-		case 31: // reason string
-			str, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.rs = str
-			offset += off + 1
-		case 33: // receive maximum
-			props.rm = binary.BigEndian.Uint16(data[offset+1 : offset+3])
-			offset += 3
-		case 34: // topic alias maximum
-			props.tam = binary.BigEndian.Uint16(data[offset+1 : offset+3])
-			offset += 3
-		case 35: // topic alias
-			props.ta = binary.BigEndian.Uint16(data[offset+1 : offset+3])
-			offset += 3
-		case 36: // maximum QoS
-			props.mq = data[offset+1]
-			offset += 2
-		case 37: // retain available
-			props.ra = data[offset+1]
-			offset += 2
-		case 38: // user property
-			nameStr, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.up.name = nameStr
-			offset += off + 1
-			valStr, off, err := decodeUtf8(data[offset:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
-			}
-			props.up.val = valStr
-			offset += off + 1
-		case 39: // maximum packet size
-			props.mps = binary.BigEndian.Uint32(data[offset+1 : offset+5])
-			offset += 5
-		case 40: // wildcard subscription available
-			props.wsa = data[offset+1]
-			offset += 2
-		case 41: // subscription identifier available
-			props.sia = data[offset+1]
-			offset += 2
-		case 42: // shared subscription available
-			props.ssa = data[offset+1]
-			offset += 2
-		default:
-			return offset, fmt.Errorf("%v: %v", MalProps, InvalidPropId)
-		}
-	}
-
-	return offset, nil
-}
 
 const multMax uint32 = 128 * 128 * 128
 
 var InvalidVarByteInt = errors.New("Invalid variable byte integer")
 
 func decodeVarByteInt(data []byte) (uint32, int, error) {
-	var mult uint32 = 0
+	var mult uint32 = 1
 	var val uint32 = 0
 
 	i := 0
 	for {
 		if mult > multMax {
-			return 0, 0, InvalidVarByteInt
+			return val, i, InvalidVarByteInt
 		}
 
 		b := data[i]
@@ -281,8 +181,9 @@ func decodeVarByteInt(data []byte) (uint32, int, error) {
 	}
 
 }
-func encodeVarByteInt(buf []byte, num uint32) {
+func encodeVarByteInt(buf []byte, num int) []byte {
 	// TODO:
+	return buf
 }
 
 var InvalidUtf8 = errors.New("Invalid utf8 string")
@@ -291,7 +192,7 @@ func decodeUtf8(data []byte) (string, int, error) {
 	var str strings.Builder
 	l := int(binary.BigEndian.Uint16(data[0:2]))
 
-	off := 0
+	off := 2
 	for {
 		r, size := utf8.DecodeRune(data[off:])
 		if r == utf8.RuneError {
@@ -300,12 +201,18 @@ func decodeUtf8(data []byte) (string, int, error) {
 		// TODO: more checking for mqtt specifics around utf8
 		str.WriteRune(r)
 		off += size
-		if off >= l {
+		if off >= l+2 {
 			break
 		}
 	}
 
-	return str.String(), l, nil
+	return str.String(), off, nil
+}
+
+func encodeUtf8(data []byte, str string) []byte {
+	data = binary.BigEndian.AppendUint16(data, uint16(len(str)))
+	data = append(data, []byte(str)...)
+	return data
 }
 
 func decodeBinary(data []byte, buf []byte) int {

@@ -68,8 +68,9 @@ func DecodeConnect(connect *Connect, data []byte) error {
 	// TODO: more checking on the flags
 
 	connect.keepalive = binary.BigEndian.Uint16(rest[2:4])
+	rest = rest[4:]
 
-	offset, err = decodeConnectProps(&connect.props, rest[4:])
+	offset, err = decodeConnectProps(&connect.props, rest)
 	if err != nil {
 		return fmt.Errorf("%v: %v", MalConnPacket, err)
 	}
@@ -169,7 +170,7 @@ func decodeConnectProps(props *ConnectProps, data []byte) (int, error) {
 			return offset, fmt.Errorf("%v: %v", MalProps, InvalidPropId)
 		}
 	}
-	return offset, nil
+	return end, nil
 }
 
 func decodeWillProps(props *WillProps, data []byte) (int, error) {
