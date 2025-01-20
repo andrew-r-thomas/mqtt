@@ -1,6 +1,8 @@
 package packets
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+)
 
 type Connack struct {
 	sessionPresent bool
@@ -36,103 +38,120 @@ type ConnackProps struct {
 }
 
 // these buffers are assumed to be empty (zero len, some capacity)
-func EncodeConnack(connack *Connack, buf []byte, scratch []byte) []byte {
+func EncodeConnack(connack *Connack, buf []byte, scratch []byte) int {
 	// encode the packet type, no flags for this one
-	buf = append(buf, byte(2<<4))
+	buf[0] = 2 << 4
 
-	remLen := 2
 	// encode variable header into scratch
 	if connack.sessionPresent {
-		scratch = append(scratch, 1)
+		scratch[0] = 1
 	} else {
-		scratch = append(scratch, 0)
+		scratch[0] = 0
 	}
-	scratch = append(scratch, byte(connack.reasonCode))
-	scratch = encodeConnackProps(&connack.props, scratch, buf[1:])
-	remLen += len(scratch)
-	buf = encodeVarByteInt(buf, remLen)
-	buf = append(buf, scratch...)
+	scratch[1] = byte(connack.reasonCode)
+	sl := 2
+	sl += encodeConnackProps(&connack.props, scratch[sl:], buf[1:])
+	bl := encodeVarByteInt(buf[1:], sl)
+	copy(buf[bl+1:], scratch[:sl])
 
-	return buf
+	return bl + sl + 1
 }
 
-func encodeConnackProps(props *ConnackProps, buf []byte, scratch []byte) []byte {
+func encodeConnackProps(props *ConnackProps, buf []byte, scratch []byte) int {
+	l := 0
 	if props.rm != 0 {
-		scratch = append(scratch, 33)
-		scratch = binary.BigEndian.AppendUint16(scratch, props.rm)
+		scratch[l] = 33
+		binary.BigEndian.PutUint16(scratch[l+1:l+3], props.rm)
+		l += 3
 	}
 	if props.mps != 0 {
-		scratch = append(scratch, 39)
-		scratch = binary.BigEndian.AppendUint32(scratch, props.mps)
+		scratch[l] = 39
+		binary.BigEndian.PutUint32(scratch[l+1:l+5], props.mps)
+		l += 5
 	}
 	if props.aci != "" {
-		scratch = append(scratch, 18)
-		scratch = encodeUtf8(scratch, props.aci)
+		scratch[l] = 18
+		ll := encodeUtf8(scratch[l+1:], props.aci)
+		l += ll + 1
 	}
 	if props.tam != 0 {
-		scratch = append(scratch, 34)
-		scratch = binary.BigEndian.AppendUint16(scratch, props.tam)
+		scratch[l] = 34
+		binary.BigEndian.PutUint16(scratch[l+1:l+3], props.tam)
+		l += 3
 	}
 	if props.rs != "" {
-		scratch = append(scratch, 31)
-		scratch = encodeUtf8(scratch, props.rs)
+		scratch[l] = 31
+		ll := encodeUtf8(scratch[l+1:], props.rs)
+		l += ll + 1
 	}
 	for _, up := range props.up {
-		scratch = append(scratch, 38)
-		scratch = encodeUtf8(scratch, up.name)
-		scratch = encodeUtf8(scratch, up.val)
+		scratch[l] = 38
+		lln := encodeUtf8(scratch[l+1:], up.name)
+		llv := encodeUtf8(scratch[lln+1:], up.val)
+		l += lln + llv + 1
 	}
 	if props.ri != "" {
-		scratch = append(scratch, 26)
-		scratch = encodeUtf8(scratch, props.ri)
+		scratch[l] = 26
+		ll := encodeUtf8(scratch[l+1:], props.ri)
+		l += ll + 1
 	}
 	if props.sr != "" {
-		scratch = append(scratch, 28)
-		scratch = encodeUtf8(scratch, props.sr)
+		scratch[l] = 28
+		ll := encodeUtf8(scratch[l+1:], props.sr)
+		l += ll + 1
 	}
 	if props.am != "" {
-		scratch = append(scratch, 21)
-		scratch = encodeUtf8(scratch, props.am)
+		scratch[l] = 21
+		ll := encodeUtf8(scratch[l+1:], props.sr)
+		l += ll + 1
 	}
 	if len(props.ad) != 0 {
-		scratch = append(scratch, 22)
-		scratch = binary.BigEndian.AppendUint16(scratch, uint16(len(props.ad)))
-		scratch = append(scratch, props.ad...)
+		scratch[l] = 22
+		binary.BigEndian.AppendUint16(scratch[l+1:l+3], uint16(len(props.ad)))
+		copy(scratch[l+3:], props.ad)
+		l += len(props.ad) + 3
 	}
 	if props.mq != 2 {
-		scratch = append(scratch, 36)
-		scratch = append(scratch, props.mq)
+		scratch[l] = 36
+		scratch[l+1] = props.mq
+		l += 2
 	}
 	if !props.ra {
-		scratch = append(scratch, 37)
-		scratch = append(scratch, 0)
+		scratch[l] = 37
+		scratch[l+1] = 0
+		l += 2
 	}
 	if !props.wsa {
-		scratch = append(scratch, 40)
-		scratch = append(scratch, 0)
+		scratch[l] = 40
+		scratch[l+1] = 0
+		l += 2
 	}
 	if !props.sia {
-		scratch = append(scratch, 41)
-		scratch = append(scratch, 0)
+		scratch[l] = 41
+		scratch[l+1] = 0
+		l += 2
 	}
 	if !props.ssa {
-		scratch = append(scratch, 42)
-		scratch = append(scratch, 0)
+		scratch[l] = 42
+		scratch[l+1] = 0
+		l += 2
 	}
 	if props.ska != -1 {
-		scratch = append(scratch, 19)
-		scratch = binary.BigEndian.AppendUint16(scratch, uint16(props.ska))
+		scratch[l] = 19
+		binary.BigEndian.PutUint16(scratch[l+1:l+3], uint16(props.ska))
+		l += 3
 	}
 	if props.sei != -1 {
-		scratch = append(scratch, 17)
-		scratch = binary.BigEndian.AppendUint32(scratch, uint32(props.sei))
+		scratch[l] = 17
+		binary.BigEndian.PutUint32(scratch[l+1:l+5], uint32(props.sei))
+		l += 5
 	}
 
-	buf = encodeVarByteInt(buf, len(scratch))
-	buf = append(buf, scratch...)
+	bl := encodeVarByteInt(buf, l)
+	copy(buf[bl:], scratch[:l])
 	clear(scratch)
 
-	return buf
+	return bl + l
 }
 
 func (c *Connack) Zero() {
@@ -154,7 +173,7 @@ func (p *ConnackProps) zero() {
 	p.am = ""
 	clear(p.ad)
 	p.ad = p.ad[:0]
-	p.mq = 0
+	p.mq = 2
 	p.ra = true
 	p.wsa = true
 	p.sia = true

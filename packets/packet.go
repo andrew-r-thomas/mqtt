@@ -6,6 +6,7 @@
    (kinda thinking we should just use a byte slice
     or maybe there's some helpful stuff in the standard lib)
  - extract out some common functionality for props
+ - we're gonna do everything with copy, but we need to add bounds checks and stuff
 
 */
 
@@ -86,6 +87,11 @@ func (pt PacketType) String() string {
 type StringPair struct {
 	name string
 	val  string
+}
+
+func (sp *StringPair) zero() {
+	sp.name = ""
+	sp.val = ""
 }
 
 type ReasonCode byte
@@ -181,9 +187,20 @@ func decodeVarByteInt(data []byte) (uint32, int, error) {
 	}
 
 }
-func encodeVarByteInt(buf []byte, num int) []byte {
-	// TODO:
-	return buf
+func encodeVarByteInt(buf []byte, num int) int {
+	i := 0
+	for {
+		b := byte(num) % 128
+		num = num / 128
+		if num > 0 {
+			b = b | 128
+		}
+		buf[i] = b
+		i += 1
+		if num <= 0 {
+			return i
+		}
+	}
 }
 
 var InvalidUtf8 = errors.New("Invalid utf8 string")
@@ -209,10 +226,10 @@ func decodeUtf8(data []byte) (string, int, error) {
 	return str.String(), off, nil
 }
 
-func encodeUtf8(data []byte, str string) []byte {
-	data = binary.BigEndian.AppendUint16(data, uint16(len(str)))
-	data = append(data, []byte(str)...)
-	return data
+func encodeUtf8(data []byte, str string) int {
+	binary.BigEndian.PutUint16(data[:2], uint16(len(str)))
+	copy(data[2:2+len(str)], str)
+	return 2 + len(str)
 }
 
 func decodeBinary(data []byte, buf []byte) int {

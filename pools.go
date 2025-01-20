@@ -7,7 +7,7 @@ type BufPool struct {
 
 func NewBufPool(capacity int, bufCap int) BufPool {
 	pool := make(chan []byte, capacity)
-	for _ = range capacity {
+	for range capacity {
 		pool <- make([]byte, bufCap)
 	}
 	return BufPool{pool: pool, bufCap: bufCap}

@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"fmt"
 	"log"
 	"net"
 
@@ -111,10 +112,31 @@ func handleClient(
 
 	connect := packets.Connect{}
 
-	err = packets.DecodeConnect(&connect, buf[offset:])
+	err = packets.DecodeConnect(&connect, buf[offset:n])
 	if err != nil {
 		log.Fatalf("ahh! error decoding connect:\n%v", err)
 	}
 
-	log.Printf("connect packet:\n %#v", connect)
+	log.Printf("connect packet:\n%#v\n", connect)
+
+	connack := packets.Connack{}
+	connack.Zero()
+	clear(buf)
+	scratch := bp.GetBuf()
+	bl := packets.EncodeConnack(&connack, buf, scratch)
+	printBuf("buf", buf[:bl])
+	n, err = conn.Write(buf[:bl])
+	if err != nil {
+		log.Fatalf("ahh error writing to conn: %v\n", err)
+	}
+
+	for {
+	}
+}
+
+func printBuf(name string, buf []byte) {
+	fmt.Printf("buf %s: %d items\n", name, len(buf))
+	for i, b := range buf {
+		fmt.Printf("byte %d: %08b\n", i, b)
+	}
 }

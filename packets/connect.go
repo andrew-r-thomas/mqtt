@@ -19,10 +19,11 @@ type Connect struct {
 }
 
 type ConnectProps struct {
-	sei uint32     // session expiry interval
-	mps uint32     // maximum packet size
-	rm  uint16     // receive maximum
-	tam uint16     // topic alias maximum
+	sei uint32 // session expiry interval
+	mps uint32 // maximum packet size
+	rm  uint16 // receive maximum
+	tam uint16 // topic alias maximum
+	// TODO: change this to be a slice
 	up  StringPair // user property
 	am  string     // authentication method
 	ad  []byte     // authentication data
@@ -115,6 +116,44 @@ func DecodeConnect(connect *Connect, data []byte) error {
 		decodeBinary(rest, connect.password)
 	}
 	return nil
+}
+
+func (c *Connect) Zero() {
+	c.username = ""
+	clear(c.password)
+	c.password = c.password[:0]
+	c.id = ""
+	c.keepalive = 0
+	c.flags = 0
+	c.willTopic = ""
+	clear(c.willPayload)
+	c.willPayload = c.willPayload[:0]
+	c.props.zero()
+	c.willProps.zero()
+}
+
+func (p *ConnectProps) zero() {
+	p.sei = 0
+	p.mps = 0
+	p.rm = 0
+	p.tam = 0
+	p.am = ""
+	clear(p.ad)
+	p.ad = p.ad[:0]
+	p.rri = 0
+	p.rpi = 0
+	p.up.zero()
+}
+
+func (p *WillProps) zero() {
+	p.pfi = 0
+	p.mei = 0
+	p.ct = ""
+	p.rt = ""
+	clear(p.cd)
+	p.cd = p.cd[:0]
+	p.wdi = 0
+	p.up.zero()
 }
 
 func decodeConnectProps(props *ConnectProps, data []byte) (int, error) {
