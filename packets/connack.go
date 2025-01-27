@@ -5,8 +5,12 @@ type Connack struct {
 	reasonCode     ReasonCode
 }
 
-// these buffers are assumed to be empty (zero len, some capacity)
-func EncodeConnack(connack *Connack, props *Properties, buf []byte, scratch []byte) int {
+func EncodeConnack(
+	connack *Connack,
+	props *Properties,
+	buf []byte,
+	scratch []byte,
+) int {
 	// encode the packet type, no flags for this one
 	buf[0] = 2 << 4
 

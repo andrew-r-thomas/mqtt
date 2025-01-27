@@ -11,7 +11,9 @@ TODO:
 
 package mqtt
 
-import "strings"
+import (
+	"strings"
+)
 
 type TopicTree struct {
 	nodes  []topicNode
@@ -30,8 +32,8 @@ type topicNode struct {
 }
 
 type SubMsg struct {
-	TopicFilter []string
-	ClientId    string
+	TopicFilters [][]string
+	ClientId     string
 }
 type UnSubMsg struct {
 	ClientId    string
@@ -70,6 +72,7 @@ func NewTopicTree(
 		addCliChan: addCliMsg,
 		remCliChan: remCliMsg,
 		unSubChan:  unSubChan,
+		cidMap:     make(map[string]chan<- []byte),
 	}
 }
 
@@ -87,24 +90,25 @@ func (t *TopicTree) Start() {
 }
 
 func (t *TopicTree) handleSub(sub SubMsg) {
-	currNode := t.nodes[0]
-	for _, level := range sub.TopicFilter {
-		child, ok := currNode.children[level]
-		if !ok {
-			child = len(t.nodes)
-			t.nodes = append(
-				t.nodes,
-				topicNode{
-					subs:     []string{},
-					children: map[string]int{},
-				},
-			)
-			currNode.children[level] = child
+	for _, filter := range sub.TopicFilters {
+		currNode := t.nodes[0]
+		for _, level := range filter {
+			child, ok := currNode.children[level]
+			if !ok {
+				child = len(t.nodes)
+				t.nodes = append(
+					t.nodes,
+					topicNode{
+						subs:     []string{},
+						children: map[string]int{},
+					},
+				)
+				currNode.children[level] = child
+			}
+			currNode = t.nodes[child]
 		}
-		currNode = t.nodes[child]
+		currNode.subs = append(currNode.subs, sub.ClientId)
 	}
-
-	currNode.subs = append(currNode.subs, sub.ClientId)
 }
 
 // this is the function we want to optimize our datastructure for
