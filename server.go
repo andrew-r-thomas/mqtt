@@ -37,7 +37,7 @@ func NewServer(addr string) Server {
 		remCliChan,
 	)
 
-	bp := NewBufPool(1000, 1024)
+	bp := NewBufPool(1000, 1024) // 1mb
 
 	return Server{
 		addr: addr,
@@ -93,7 +93,6 @@ func handleClient(
 
 	bp *BufPool,
 ) {
-	// set up packet lib and read buf
 	pl := packets.NewPacketLib()
 	pl.Zero()
 
@@ -107,67 +106,52 @@ func handleClient(
 	sender := make(chan []byte, 10)
 	addCliChan <- AddCliMsg{ClientId: connect.Id, Sender: sender}
 
-	readChan := make(chan []byte, 10)
-	go readPackets(conn, bp, readChan)
+	readChan := make(chan Packet, 10)
+	go readPump(conn, bp, readChan)
 
-	// wait for packets
 	for {
 		select {
 		case pub := <-sender:
 			log.Printf("got a pub\n")
 			conn.Write(pub)
 			bp.ReturnBuf(pub)
-		case read := <-readChan:
-			log.Printf("packet bytes: %v\n", read[:10])
-			// read fixed header (and maybe more) in
-			pl.FixedHeader.Zero()
-			offset, err := packets.DecodeFixedHeader(&pl.FixedHeader, read)
-			if err != nil {
-				log.Fatalf("ahhh! %v", err)
-			}
-			if len(read) < int(pl.FixedHeader.RemLen)+offset {
-				log.Fatalf("ahhh! didn't read enough!")
-			}
-			log.Printf("packet header: %#v\n", pl.FixedHeader)
-
-			switch pl.FixedHeader.Pt {
+		case packet := <-readChan:
+			offset := len(packet.buf) - int(packet.fh.RemLen)
+			switch packet.fh.Pt {
 			case packets.PUBLISH:
 				pl.Properties.Zero()
 				packets.DecodePublish(
 					&pl.FixedHeader,
 					&pl.Publish,
 					&pl.Properties,
-					read[offset:],
+					packet.buf[offset:],
 				)
 				pubChan <- PubMsg{
 					Topic: pl.Publish.Topic,
-					Msg:   read,
+					Msg:   packet.buf,
 				}
 			case packets.PINGREQ:
-				log.Printf("ping\n")
-				clear(read)
-				read[0] = 0b11010000
-				read[1] = 0
-				_, err = conn.Write(read[:2])
+				clear(packet.buf)
+				packet.buf[0] = 0b11010000
+				packet.buf[1] = 0
+				_, err := conn.Write(packet.buf[:2])
 				if err != nil {
 					log.Fatalf("ahhh! %v\n", err)
 				}
+				bp.ReturnBuf(packet.buf)
 			case packets.SUBSCRIBE:
-				log.Printf("got a subscribe\n")
 				pl.Properties.Zero()
 				pl.Subscribe.Zero()
 				packets.DecodeSubscribe(
 					&pl.Subscribe,
 					&pl.Properties,
-					read[offset:],
+					packet.buf[offset:],
 				)
-				log.Printf("subscribe packet id: %d\n", pl.Subscribe.PackedId)
 
 				pl.Suback.Zero()
 				tfs := [][]string{}
 				for _, filter := range pl.Subscribe.TopicFilters {
 					// TODO: validate filter in here
-					log.Printf("topic filter: %s\n", filter.Filter)
 					pl.Suback.ReasonCodes = append(pl.Suback.ReasonCodes, 0)
 					tfs = append(tfs, strings.Split(filter.Filter, "/"))
 				}
@@ -178,18 +162,19 @@ func handleClient(
 
 				pl.Suback.PacketId = pl.Subscribe.PackedId
 				pl.Properties.Zero()
-				clear(read)
+				clear(packet.buf)
 				scratch := bp.GetBuf()
-				i := packets.EncodeSuback(&pl.Suback, &pl.Properties, read, scratch)
-				_, err := conn.Write(read[:i])
+				i := packets.EncodeSuback(&pl.Suback, &pl.Properties, packet.buf, scratch)
+				_, err := conn.Write(packet.buf[:i])
 				if err != nil {
 					log.Fatalf("error writing suback: %v\n", err)
 				}
 				bp.ReturnBuf(scratch)
+				bp.ReturnBuf(packet.buf)
 			default:
 				log.Printf("bad packet\n")
+				bp.ReturnBuf(packet.buf)
 			}
-			bp.ReturnBuf(read)
 		}
 	}
 }
@@ -250,14 +235,39 @@ func setupConnection(
 	return connect, willProps
 }
 
-func readPackets(conn net.Conn, bp *BufPool, sender chan<- []byte) {
+type Packet struct {
+	fh  packets.FixedHeader
+	buf []byte // this is the whole buffer, including the fixed header
+}
+
+func readPump(conn net.Conn, bp *BufPool, sender chan<- Packet) {
+	fh := packets.FixedHeader{}
+
 	for {
+		fh.Zero()
 		buf := bp.GetBuf()
+
 		n, err := conn.Read(buf)
 		if err != nil {
 			log.Fatalf("error reading from conn! %v\n", err)
 		}
-		log.Printf("packet bytes in reader: %v\n", buf[:10])
-		sender <- buf[:n]
+
+		offset, err := packets.DecodeFixedHeader(&fh, buf)
+
+		for n < int(fh.RemLen)+offset {
+			// didn't read enough
+			b := bp.GetBuf()
+			defer bp.ReturnBuf(b)
+
+			nn, err := conn.Read(b)
+			if err != nil {
+				log.Fatalf("error reading from conn: %v\n", err)
+			}
+
+			n += nn
+			buf = append(buf, b...)
+		}
+
+		sender <- Packet{fh: fh, buf: buf[:n]}
 	}
 }

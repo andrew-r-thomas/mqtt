@@ -24,9 +24,8 @@ func (bp *BufPool) GetBuf() []byte {
 
 func (bp *BufPool) ReturnBuf(buf []byte) {
 	clear(buf)
-	buf = buf[:bp.bufCap]
 	select {
-	case bp.pool <- buf:
+	case bp.pool <- buf[:min(bp.bufCap, len(buf))]:
 	default:
 	}
 }

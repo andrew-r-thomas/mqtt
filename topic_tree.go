@@ -12,6 +12,7 @@ TODO:
 package mqtt
 
 import (
+	"log"
 	"strings"
 )
 
@@ -91,7 +92,7 @@ func (t *TopicTree) Start() {
 
 func (t *TopicTree) handleSub(sub SubMsg) {
 	for _, filter := range sub.TopicFilters {
-		currNode := t.nodes[0]
+		currNode := &t.nodes[0]
 		for _, level := range filter {
 			child, ok := currNode.children[level]
 			if !ok {
@@ -105,19 +106,23 @@ func (t *TopicTree) handleSub(sub SubMsg) {
 				)
 				currNode.children[level] = child
 			}
-			currNode = t.nodes[child]
+			currNode = &t.nodes[child]
 		}
+		log.Printf("adding %s to %v\n", sub.ClientId, currNode)
 		currNode.subs = append(currNode.subs, sub.ClientId)
 	}
 }
 
 // this is the function we want to optimize our datastructure for
 func (t *TopicTree) handlePub(pub PubMsg) {
+	log.Printf("got a pub in tt\n")
 	levels := strings.Split(pub.Topic, "/")
 	currNodes := []int{0}
 	for _, l := range levels {
 		for i, n := range currNodes {
 			node := t.nodes[n]
+			log.Printf("level: %s\n", l)
+			log.Printf("node: %v\n", node)
 			wildHash, ok := node.children["#"]
 			if ok {
 				for _, s := range t.nodes[wildHash].subs {
@@ -131,6 +136,7 @@ func (t *TopicTree) handlePub(pub PubMsg) {
 
 			level, ok := node.children[l]
 			if ok {
+				log.Printf("setting currNodes[%d] to %d\n", i, level)
 				currNodes[i] = level
 			} else {
 				currNodes[i] = currNodes[len(currNodes)-1]
@@ -140,7 +146,9 @@ func (t *TopicTree) handlePub(pub PubMsg) {
 	}
 
 	for _, c := range currNodes {
+		log.Printf("sending to subs of %d\n", c)
 		for _, s := range t.nodes[c].subs {
+			log.Printf("sending pub to %s\n", s)
 			t.cidMap[s] <- pub.Msg
 		}
 	}
