@@ -98,7 +98,6 @@ func handleClient(
 
 	connect, _ := setupConnection(
 		conn,
-		&pl.FixedHeader,
 		&pl.Properties,
 		bp,
 	)
@@ -112,7 +111,6 @@ func handleClient(
 	for {
 		select {
 		case pub := <-sender:
-			log.Printf("got a pub\n")
 			conn.Write(pub)
 			bp.ReturnBuf(pub)
 		case packet := <-readChan:
@@ -121,7 +119,7 @@ func handleClient(
 			case packets.PUBLISH:
 				pl.Properties.Zero()
 				packets.DecodePublish(
-					&pl.FixedHeader,
+					&packet.fh,
 					&pl.Publish,
 					&pl.Properties,
 					packet.buf[offset:],
@@ -152,8 +150,16 @@ func handleClient(
 				tfs := [][]string{}
 				for _, filter := range pl.Subscribe.TopicFilters {
 					// TODO: validate filter in here
-					pl.Suback.ReasonCodes = append(pl.Suback.ReasonCodes, 0)
-					tfs = append(tfs, strings.Split(filter.Filter, "/"))
+					pl.Suback.ReasonCodes = append(
+						pl.Suback.ReasonCodes, 0,
+					)
+					tfs = append(
+						tfs,
+						strings.Split(
+							filter.Filter,
+							"/",
+						),
+					)
 				}
 				subChan <- SubMsg{
 					ClientId:     connect.Id,
@@ -164,10 +170,56 @@ func handleClient(
 				pl.Properties.Zero()
 				clear(packet.buf)
 				scratch := bp.GetBuf()
-				i := packets.EncodeSuback(&pl.Suback, &pl.Properties, packet.buf, scratch)
+				i := packets.EncodeSuback(
+					&pl.Suback,
+					&pl.Properties,
+					packet.buf,
+					scratch,
+				)
 				_, err := conn.Write(packet.buf[:i])
 				if err != nil {
-					log.Fatalf("error writing suback: %v\n", err)
+					log.Fatalf(
+						"error writing suback: %v\n",
+						err,
+					)
+				}
+				bp.ReturnBuf(scratch)
+				bp.ReturnBuf(packet.buf)
+			case packets.UNSUBSCRIBE:
+				for _, b := range packet.buf {
+					log.Printf("%08b\n", b)
+				}
+
+				pl.Properties.Zero()
+				pl.Unsubscribe.Zero()
+				packets.DecodeUnsubscribe(
+					&pl.Unsubscribe,
+					&pl.Properties,
+					packet.buf[offset:],
+				)
+
+				pl.Unsuback.Zero()
+				tfs := [][]string{}
+				for _, filter := range pl.Unsubscribe.TopciFilters {
+					pl.Unsuback.ReasonCodes = append(pl.Unsuback.ReasonCodes, 0)
+					tfs = append(tfs, strings.Split(filter, "/"))
+				}
+				unSubChan <- UnSubMsg{
+					ClientId:     connect.Id,
+					TopicFilters: tfs,
+				}
+
+				pl.Unsuback.PacketId = pl.Unsubscribe.PacketId
+				pl.Properties.Zero()
+				clear(packet.buf)
+				scratch := bp.GetBuf()
+				i := packets.EncodeUnsuback(&pl.Unsuback, &pl.Properties, packet.buf, scratch)
+				_, err := conn.Write(packet.buf[:i])
+				if err != nil {
+					log.Fatalf(
+						"error writing unsuback: %v\n",
+						err,
+					)
 				}
 				bp.ReturnBuf(scratch)
 				bp.ReturnBuf(packet.buf)
@@ -181,7 +233,6 @@ func handleClient(
 
 func setupConnection(
 	conn net.Conn,
-	fh *packets.FixedHeader,
 	props *packets.Properties,
 	bp *BufPool,
 ) (packets.Connect, packets.Properties) {
@@ -193,7 +244,10 @@ func setupConnection(
 		log.Fatalf("ahhh! %v", err)
 	}
 
-	offset, err := packets.DecodeFixedHeader(fh, buf)
+	fh := packets.FixedHeader{}
+	fh.Zero()
+
+	offset, err := packets.DecodeFixedHeader(&fh, buf)
 	if err != nil {
 		log.Fatalf("ahhh! %v", err)
 	}

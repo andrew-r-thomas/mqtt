@@ -5,7 +5,6 @@ TODO:
   - shared subscriptions, starting with round robin load balancing,
     and maybe using $SYS messages for picking a strategy
   - decide if we want to use other '$' prefixed topics, or just not support them
-  - handle wildcards
 
 */
 
@@ -37,8 +36,8 @@ type SubMsg struct {
 	ClientId     string
 }
 type UnSubMsg struct {
-	ClientId    string
-	TopicFilter []string
+	ClientId     string
+	TopicFilters [][]string
 }
 type PubMsg struct {
 	Topic string
@@ -59,9 +58,9 @@ type RemCliMsg struct {
 func NewTopicTree(
 	pubChan <-chan PubMsg,
 	subChan <-chan SubMsg,
-	addCliMsg <-chan AddCliMsg,
+	addCliChan <-chan AddCliMsg,
 	unSubChan <-chan UnSubMsg,
-	remCliMsg <-chan RemCliMsg,
+	remCliChan <-chan RemCliMsg,
 ) TopicTree {
 	return TopicTree{
 		nodes: []topicNode{{
@@ -70,8 +69,8 @@ func NewTopicTree(
 		}},
 		pubChan:    pubChan,
 		subChan:    subChan,
-		addCliChan: addCliMsg,
-		remCliChan: remCliMsg,
+		addCliChan: addCliChan,
+		remCliChan: remCliChan,
 		unSubChan:  unSubChan,
 		cidMap:     make(map[string]chan<- []byte),
 	}
@@ -86,6 +85,8 @@ func (t *TopicTree) Start() {
 			t.handleSub(sub)
 		case pub := <-t.pubChan:
 			t.handlePub(pub)
+		case unsub := <-t.unSubChan:
+			t.handleUnsub(unsub)
 		}
 	}
 }
@@ -150,6 +151,25 @@ func (t *TopicTree) handlePub(pub PubMsg) {
 		for _, s := range t.nodes[c].subs {
 			log.Printf("sending pub to %s\n", s)
 			t.cidMap[s] <- pub.Msg
+		}
+	}
+}
+
+func (t *TopicTree) handleUnsub(unsub UnSubMsg) {
+	for _, filter := range unsub.TopicFilters {
+		currNode := &t.nodes[0]
+		for _, level := range filter {
+			child, ok := currNode.children[level]
+			if !ok {
+				break
+			}
+			currNode = &t.nodes[child]
+		}
+		for i, s := range currNode.subs {
+			if s == unsub.ClientId {
+				currNode.subs[i] = currNode.subs[len(currNode.subs)-1]
+				break
+			}
 		}
 	}
 }
