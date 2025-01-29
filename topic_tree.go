@@ -168,6 +168,7 @@ func (t *TopicTree) handleUnsub(unsub UnSubMsg) {
 		for i, s := range currNode.subs {
 			if s == unsub.ClientId {
 				currNode.subs[i] = currNode.subs[len(currNode.subs)-1]
+				currNode.subs = currNode.subs[:len(currNode.subs)-1]
 				break
 			}
 		}
