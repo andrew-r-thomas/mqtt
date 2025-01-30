@@ -87,6 +87,8 @@ func (t *TopicTree) Start() {
 			t.handlePub(pub)
 		case unsub := <-t.unSubChan:
 			t.handleUnsub(unsub)
+		case remcli := <-t.remCliChan:
+			delete(t.cidMap, remcli.ClientId)
 		}
 	}
 }
@@ -122,12 +124,13 @@ func (t *TopicTree) handlePub(pub PubMsg) {
 	for _, l := range levels {
 		for i, n := range currNodes {
 			node := t.nodes[n]
-			log.Printf("level: %s\n", l)
-			log.Printf("node: %v\n", node)
 			wildHash, ok := node.children["#"]
 			if ok {
 				for _, s := range t.nodes[wildHash].subs {
-					t.cidMap[s] <- pub.Msg
+					c := t.cidMap[s]
+					if c != nil {
+						c <- pub.Msg
+					}
 				}
 			}
 			wildPlus, ok := node.children["+"]
@@ -147,10 +150,11 @@ func (t *TopicTree) handlePub(pub PubMsg) {
 	}
 
 	for _, c := range currNodes {
-		log.Printf("sending to subs of %d\n", c)
 		for _, s := range t.nodes[c].subs {
-			log.Printf("sending pub to %s\n", s)
-			t.cidMap[s] <- pub.Msg
+			c := t.cidMap[s]
+			if c != nil {
+				c <- pub.Msg
+			}
 		}
 	}
 }

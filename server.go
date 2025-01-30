@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"context"
 	"log"
 	"net"
 	"strings"
@@ -106,7 +107,8 @@ func handleClient(
 	addCliChan <- AddCliMsg{ClientId: connect.Id, Sender: sender}
 
 	readChan := make(chan Packet, 10)
-	go readPump(conn, bp, readChan)
+	ctx, cancel := context.WithCancel(context.Background())
+	go readPump(conn, bp, readChan, ctx)
 
 	for {
 		select {
@@ -223,6 +225,12 @@ func handleClient(
 				}
 				bp.ReturnBuf(scratch)
 				bp.ReturnBuf(packet.buf)
+			case packets.DISCONNECT:
+				cancel()
+				remCliChan <- RemCliMsg{
+					ClientId: connect.Id,
+				}
+				return
 			default:
 				log.Printf("bad packet\n")
 				bp.ReturnBuf(packet.buf)
@@ -294,34 +302,44 @@ type Packet struct {
 	buf []byte // this is the whole buffer, including the fixed header
 }
 
-func readPump(conn net.Conn, bp *BufPool, sender chan<- Packet) {
+func readPump(
+	conn net.Conn,
+	bp *BufPool,
+	sender chan<- Packet,
+	ctx context.Context,
+) {
 	fh := packets.FixedHeader{}
 
 	for {
-		fh.Zero()
-		buf := bp.GetBuf()
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			fh.Zero()
+			buf := bp.GetBuf()
 
-		n, err := conn.Read(buf)
-		if err != nil {
-			log.Fatalf("error reading from conn! %v\n", err)
-		}
-
-		offset, err := packets.DecodeFixedHeader(&fh, buf)
-
-		for n < int(fh.RemLen)+offset {
-			// didn't read enough
-			b := bp.GetBuf()
-			defer bp.ReturnBuf(b)
-
-			nn, err := conn.Read(b)
+			n, err := conn.Read(buf)
 			if err != nil {
-				log.Fatalf("error reading from conn: %v\n", err)
+				log.Fatalf("error reading from conn! %v\n", err)
 			}
 
-			n += nn
-			buf = append(buf, b...)
-		}
+			offset, err := packets.DecodeFixedHeader(&fh, buf)
 
-		sender <- Packet{fh: fh, buf: buf[:n]}
+			for n < int(fh.RemLen)+offset {
+				// didn't read enough
+				b := bp.GetBuf()
+				defer bp.ReturnBuf(b)
+
+				nn, err := conn.Read(b)
+				if err != nil {
+					log.Fatalf("error reading from conn: %v\n", err)
+				}
+
+				n += nn
+				buf = append(buf, b...)
+			}
+
+			sender <- Packet{fh: fh, buf: buf[:n]}
+		}
 	}
 }
