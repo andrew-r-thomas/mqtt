@@ -92,10 +92,8 @@ func handleClient(
 	remCliChan chan<- RemCliMsg,
 
 	bp *BufPool,
+	fp *FHPool,
 ) {
-	pl := packets.NewPacketLib()
-	pl.Zero()
-
 	connect, _ := setupConnection(
 		conn,
 		&pl.Properties,
@@ -105,7 +103,7 @@ func handleClient(
 	readChan := make(chan Packet, 10)
 	writeChan := make(chan []byte, 10)
 	addCliChan <- AddCliMsg{ClientId: connect.Id, Sender: writeChan}
-	go readPump(conn, bp, readChan)
+	go readPump(conn, bp, fp, readChan)
 	go writePump(conn, bp, writeChan)
 
 	for packet := range readChan {
@@ -185,7 +183,10 @@ func handleClient(
 			pl.Unsuback.Zero()
 			tfs := [][]string{}
 			for _, filter := range pl.Unsubscribe.TopciFilters {
-				pl.Unsuback.ReasonCodes = append(pl.Unsuback.ReasonCodes, 0)
+				pl.Unsuback.ReasonCodes = append(
+					pl.Unsuback.ReasonCodes,
+					0,
+				)
 				tfs = append(tfs, strings.Split(filter, "/"))
 			}
 			unSubChan <- UnSubMsg{
@@ -197,7 +198,12 @@ func handleClient(
 			pl.Properties.Zero()
 			clear(packet.buf)
 			scratch := bp.GetBuf()
-			i := packets.EncodeUnsuback(&pl.Unsuback, &pl.Properties, packet.buf, scratch)
+			i := packets.EncodeUnsuback(
+				&pl.Unsuback,
+				&pl.Properties,
+				packet.buf,
+				scratch,
+			)
 			bp.ReturnBuf(scratch)
 			writeChan <- packet.buf[:i]
 		case packets.DISCONNECT:
@@ -217,18 +223,18 @@ func setupConnection(
 	conn net.Conn,
 	props *packets.Properties,
 	bp *BufPool,
+	fp *FHPool,
 ) (packets.Connect, packets.Properties) {
-	buf := bp.GetBuf()
-	scratch := bp.GetBuf()
 	// wait for connect packet
+	buf := bp.GetBuf()
 	n, err := conn.Read(buf)
 	if err != nil {
 		log.Fatalf("ahhh! %v", err)
 	}
 
+	// decode fixed header
 	fh := packets.FixedHeader{}
 	fh.Zero()
-
 	offset, err := packets.DecodeFixedHeader(&fh, buf)
 	if err != nil {
 		log.Fatalf("ahhh! %v", err)
@@ -236,7 +242,14 @@ func setupConnection(
 	if n < int(fh.RemLen)+offset {
 		log.Fatalf("ahhh! didn't read enough!")
 	}
+	if fh.Pt != packets.CONNECT {
+		log.Fatalf(
+			"sent packet other than connect first: %s\n",
+			fh.Pt.String(),
+		)
+	}
 
+	// decode connect packet
 	connect := packets.Connect{}
 	connect.Zero()
 	willProps := packets.Properties{}
@@ -254,19 +267,20 @@ func setupConnection(
 	// set up buf and packets for connack
 	clear(buf)
 	props.Zero()
-
 	connack := packets.Connack{}
 	connack.Zero()
+	scratch := bp.GetBuf()
 
 	// encode connack packet and write to connection
-	bl := packets.EncodeConnack(&connack, props, buf, scratch)
-	n, err = conn.Write(buf[:bl])
+	l := packets.EncodeConnack(&connack, props, buf, scratch)
+	n, err = conn.Write(buf[:l])
 	if err != nil {
 		log.Fatalf("ahh error writing to conn: %v\n", err)
 	}
 
-	bp.ReturnBuf(buf)
+	// cleanup
 	bp.ReturnBuf(scratch)
+	bp.ReturnBuf(buf)
 
 	return connect, willProps
 }
@@ -279,12 +293,11 @@ type Packet struct {
 func readPump(
 	conn net.Conn,
 	bp *BufPool,
+	fp *FHPool,
 	sender chan<- Packet,
 ) {
-	fh := packets.FixedHeader{}
-
 	for {
-		fh.Zero()
+		fh := fp.GetFH()
 		buf := bp.GetBuf()
 
 		n, err := conn.Read(buf)
@@ -301,7 +314,10 @@ func readPump(
 
 			nn, err := conn.Read(b)
 			if err != nil {
-				log.Fatalf("error reading from conn: %v\n", err)
+				log.Fatalf(
+					"error reading from conn: %v\n",
+					err,
+				)
 			}
 
 			n += nn
