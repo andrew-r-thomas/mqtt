@@ -45,8 +45,8 @@ var MalProps = errors.New("Malformed properties")
 var InvalidPropId = errors.New("Invalid property identifier")
 
 func DecodeProps(p *Properties, data []byte) int {
-	l, offset, err := decodeVarByteInt(data)
-	if err != nil {
+	l, offset := decodeVarByteInt(data)
+	if offset == -1 {
 		return -1
 	}
 
@@ -75,8 +75,8 @@ func DecodeProps(p *Properties, data []byte) int {
 			off := decodeBinary(data[offset+1:], p.Cd)
 			offset += off + 1
 		case 11: // subscription identifier
-			si, off, err := decodeVarByteInt(data[offset+1:])
-			if err != nil {
+			si, off := decodeVarByteInt(data[offset+1:])
+			if off == -1 {
 				return -1
 			}
 			p.Si = si

@@ -80,16 +80,14 @@ const (
 
 const multMax uint32 = 128 * 128 * 128
 
-var InvalidVarByteInt = errors.New("Invalid variable byte integer")
-
-func decodeVarByteInt(data []byte) (uint32, int, error) {
+func decodeVarByteInt(data []byte) (uint32, int) {
 	var mult uint32 = 1
 	var val uint32 = 0
 
 	i := 0
 	for {
 		if mult > multMax {
-			return val, i, InvalidVarByteInt
+			return val, -1
 		}
 
 		b := data[i]
@@ -99,7 +97,7 @@ func decodeVarByteInt(data []byte) (uint32, int, error) {
 		i += 1
 
 		if (b & 128) == 0 {
-			return val, i, nil
+			return val, i
 		}
 	}
 

@@ -1,25 +1,23 @@
 package packets
 
-import "fmt"
-
 type FixedHeader struct {
 	Pt     PacketType
 	Flags  byte
 	RemLen uint32
 }
 
-func DecodeFixedHeader(fh *FixedHeader, data []byte) (int, error) {
+func DecodeFixedHeader(fh *FixedHeader, data []byte) int {
 	fh.Pt = PacketType(data[0] >> 4)
 	fh.Flags = data[0] & 0b00001111
 
-	remLen, offset, err := decodeVarByteInt(data[1:])
-	fh.RemLen = remLen
+	var offset int
+	fh.RemLen, offset = decodeVarByteInt(data[1:])
 
-	if err != nil {
-		return offset + 1, fmt.Errorf("Malformed fixed header: %v", err)
+	if offset == -1 {
+		return -1
 	}
 
-	return offset + 1, nil
+	return offset + 1
 }
 
 func (fh *FixedHeader) Zero() {

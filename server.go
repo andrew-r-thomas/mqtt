@@ -1,11 +1,15 @@
 package mqtt
 
 import (
+	"database/sql"
 	"log"
 	"net"
 	"strings"
 
 	"github.com/andrew-r-thomas/mqtt/packets"
+	"github.com/go-webauthn/webauthn/webauthn"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type Server struct {
@@ -20,6 +24,10 @@ type Server struct {
 	remCliChan chan<- RemCliMsg
 
 	bp BufPool
+	fp FHPool
+
+	auth *webauthn.WebAuthn
+	db   *sql.DB
 }
 
 func NewServer(addr string) Server {
@@ -38,6 +46,13 @@ func NewServer(addr string) Server {
 	)
 
 	bp := NewBufPool(1000, 1024) // 1mb
+	fp := NewFHPool(1000)
+
+	db, err := sql.Open("sqlite3", "./db.db")
+	// TODO: handle creating tables and such
+	if err != nil {
+		log.Fatalf("error opening db: %v\n", err)
+	}
 
 	return Server{
 		addr: addr,
@@ -51,6 +66,9 @@ func NewServer(addr string) Server {
 		remCliChan: remCliChan,
 
 		bp: bp,
+		fp: fp,
+
+		db: db,
 	}
 }
 
@@ -68,18 +86,55 @@ func (s *Server) Start() error {
 			return err
 		}
 
-		go handleClient(
-			conn,
-
-			s.pubChan,
-			s.subChan,
-			s.unSubChan,
-			s.addCliChan,
-			s.remCliChan,
-
-			&s.bp,
-		)
+		go s.handleClient(conn)
 	}
+}
+
+func (s *Server) handleClient(conn net.Conn) {
+	s.setupClient(conn)
+}
+
+func (s *Server) setupClient(conn net.Conn) {
+	// timeout and wait for CONNECT packet
+
+	// ... probably some more stuff
+
+	// authenticate
+	// if login (need to get this from connect packet or auth packet)
+	// get the user from data store
+	// TODO: const strings for the sql
+	stmt, err := s.db.Prepare("select * from users where id = ?")
+	if err != nil {
+		log.Fatalf("error preparing statement: %v\n", err)
+	}
+	var user User
+	// TODO: get id from connect or something
+	err = stmt.QueryRow("").Scan(&user)
+	if err != nil {
+		log.Fatalf("error querying row: %v\n", err)
+	}
+	stmt.Close()
+
+	cred, session, err := s.auth.BeginLogin(&user)
+}
+
+type User struct{}
+
+func (u *User) WebAuthnID() []byte {
+	// TODO:
+	return nil
+}
+func (u *User) WebAuthnName() string {
+	// TODO:
+	return ""
+}
+func (u *User) WebAuthnDisplayName() string {
+	// TODO:
+	return ""
+}
+func (u *User) WebAuthnCredentials() []webauthn.Credential {
+	// TODO:
+	return nil
 }
 
 func handleClient(
@@ -93,16 +148,21 @@ func handleClient(
 
 	bp *BufPool,
 	fp *FHPool,
+	auth *webauthn.WebAuthn,
 ) {
 	connect, _ := setupConnection(
 		conn,
 		&pl.Properties,
 		bp,
+		fp,
 	)
 
 	readChan := make(chan Packet, 10)
 	writeChan := make(chan []byte, 10)
-	addCliChan <- AddCliMsg{ClientId: connect.Id, Sender: writeChan}
+	addCliChan <- AddCliMsg{
+		ClientId: connect.Id.String(),
+		Sender:   writeChan,
+	}
 	go readPump(conn, bp, fp, readChan)
 	go writePump(conn, bp, writeChan)
 
@@ -208,7 +268,7 @@ func handleClient(
 			writeChan <- packet.buf[:i]
 		case packets.DISCONNECT:
 			remCliChan <- RemCliMsg{
-				ClientId: connect.Id,
+				ClientId: connect.Id.String(),
 			}
 			close(writeChan)
 			return
@@ -235,8 +295,8 @@ func setupConnection(
 	// decode fixed header
 	fh := packets.FixedHeader{}
 	fh.Zero()
-	offset, err := packets.DecodeFixedHeader(&fh, buf)
-	if err != nil {
+	offset := packets.DecodeFixedHeader(&fh, buf)
+	if offset == -1 {
 		log.Fatalf("ahhh! %v", err)
 	}
 	if n < int(fh.RemLen)+offset {
@@ -281,6 +341,8 @@ func setupConnection(
 	// cleanup
 	bp.ReturnBuf(scratch)
 	bp.ReturnBuf(buf)
+
+	// TODO: we want to authenticate on connect, will need a separate ep for admin stuff
 
 	return connect, willProps
 }
