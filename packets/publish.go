@@ -3,11 +3,11 @@ package packets
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
+	"strings"
 )
 
 type Publish struct {
-	Topic    string
+	Topic    strings.Builder
 	PacketId uint16
 	Payload  []byte
 }
@@ -16,12 +16,16 @@ var (
 	MalPubPacket = errors.New("Malformed publish packet")
 )
 
-func DecodePublish(fh *FixedHeader, publish *Publish, props *Properties, data []byte) error {
-	topic, l, err := decodeUtf8(data)
-	if err != nil {
-		return fmt.Errorf("%v: %v", MalPubPacket, err)
+func DecodePublish(
+	fh *FixedHeader,
+	publish *Publish,
+	props *Properties,
+	data []byte,
+) error {
+	l := decodeUtf8(data, publish.Topic)
+	if l == -1 {
+		return MalPubPacket
 	}
-	publish.Topic = topic
 	rest := data[l:]
 
 	if fh.Flags&0b00000010 > 0 || fh.Flags&0b00000100 > 0 {
@@ -31,9 +35,9 @@ func DecodePublish(fh *FixedHeader, publish *Publish, props *Properties, data []
 		l += 2
 	}
 
-	off, err := DecodeProps(props, rest)
-	if err != nil {
-		return fmt.Errorf("%v: %v", MalPubPacket, err)
+	off := DecodeProps(props, rest)
+	if off == -1 {
+		return MalPubPacket
 	}
 
 	rest = rest[off:]
@@ -45,7 +49,7 @@ func DecodePublish(fh *FixedHeader, publish *Publish, props *Properties, data []
 }
 
 func (p *Publish) Zero() {
-	p.Topic = ""
+	p.Topic.Reset()
 	p.PacketId = 0
 	clear(p.Payload)
 	p.Payload = p.Payload[:0]

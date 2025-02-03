@@ -19,13 +19,13 @@ import (
 )
 
 type StringPair struct {
-	name string
-	val  string
+	name strings.Builder
+	val  strings.Builder
 }
 
 func (sp *StringPair) zero() {
-	sp.name = ""
-	sp.val = ""
+	sp.name.Reset()
+	sp.val.Reset()
 }
 
 type ReasonCode byte
@@ -122,27 +122,38 @@ func encodeVarByteInt(buf []byte, num int) int {
 
 var InvalidUtf8 = errors.New("Invalid utf8 string")
 
-func decodeUtf8(data []byte) (string, int, error) {
-	var str strings.Builder
+// str must be empty when passed to this function
+func decodeUtf8(data []byte, str strings.Builder) int {
+	// check for safe slice indexing
+	if len(data) <= 2 {
+		return -1
+	}
 	l := int(binary.BigEndian.Uint16(data[0:2]))
-
-	off := 2
-	for {
-		r, size := utf8.DecodeRune(data[off:])
-		if r == utf8.RuneError {
-			return str.String(), l, InvalidUtf8
-		}
-		// TODO: more checking for mqtt specifics around utf8
-		str.WriteRune(r)
-		off += size
-		if off >= l+2 {
-			break
-		}
+	if len(data) < l+2 {
+		return -1
 	}
 
-	return str.String(), off, nil
+	off := 2
+	for off < l+2 {
+		r, size := utf8.DecodeRune(data[off:])
+		if r == utf8.RuneError {
+			return -1
+		}
+		// NOTE: looks like go already throws out U+D800 and U+DFFF,
+		// but we should test this
+		// also looks like the "zero width no-break space" is cut out by go
+		if r == '\u0000' {
+			return -1
+		}
+
+		str.WriteRune(r)
+		off += size
+	}
+
+	return off
 }
 
+// TODO: think about if we want to take a string builder here
 func encodeUtf8(data []byte, str string) int {
 	binary.BigEndian.PutUint16(data[:2], uint16(len(str)))
 	copy(data[2:2+len(str)], str)

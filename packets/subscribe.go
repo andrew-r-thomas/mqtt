@@ -1,6 +1,10 @@
 package packets
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"errors"
+	"strings"
+)
 
 type Subscribe struct {
 	TopicFilters []TopicFilter
@@ -8,34 +12,34 @@ type Subscribe struct {
 }
 
 type TopicFilter struct {
-	Filter string
+	Filter strings.Builder
 	Opts   byte
 }
+
+var MalSubPacket = errors.New("Malformed subscribe packet")
 
 func DecodeSubscribe(s *Subscribe, props *Properties, data []byte) error {
 	s.PackedId = binary.BigEndian.Uint16(data[0:2])
 	rest := data[2:]
 
-	offset, err := DecodeProps(props, rest)
-	if err != nil {
-		return err
+	offset := DecodeProps(props, rest)
+	if offset == -1 {
+		return MalSubPacket
 	}
 	rest = rest[offset:]
 
 	offset = 0
 	for offset < len(rest) {
+		var tf TopicFilter
 		// decode topic filters
-		tf, off, err := decodeUtf8(rest[offset:])
-		if err != nil {
-			return err
+		off := decodeUtf8(rest[offset:], tf.Filter)
+		if off == -1 {
+			return MalSubPacket
 		}
-		so := rest[offset+off]
+		tf.Opts = rest[offset+off]
 		s.TopicFilters = append(
 			s.TopicFilters,
-			TopicFilter{
-				Filter: tf,
-				Opts:   so,
-			},
+			tf,
 		)
 		offset += off + 1
 	}

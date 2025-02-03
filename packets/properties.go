@@ -3,32 +3,32 @@ package packets
 import (
 	"encoding/binary"
 	"errors"
-	"fmt"
+	"strings"
 )
 
 type Properties struct {
 	// if zero value, don't send
-	Mps uint32       // maximum packet size
-	Ad  []byte       // authentication data
-	Am  string       // authentication method
-	Rm  uint16       // receive maximum
-	Aci string       // assigned client identifier
-	Tam uint16       // topic alias maximum
-	Rs  string       // reason string
-	Sr  string       // server reference
-	Ri  string       // response information
-	Up  []StringPair // user property
-	Sei uint32       // session expiry interval
-	Rri byte         // request response information
-	Ska uint16       // server keep alive
-	Wdi uint32       // will delay interval
-	Pfi byte         // payload format indicator
-	Mei uint32       // message expiry interval
-	Ct  string       // content type
-	Rt  string       // response topic
-	Cd  []byte       // correlation data
-	Si  uint32       // subscription identifier (var byte int)
-	Ta  uint16       // topic alias
+	Mps uint32          // maximum packet size
+	Ad  []byte          // authentication data
+	Am  strings.Builder // authentication method
+	Rm  uint16          // receive maximum
+	Aci strings.Builder // assigned client identifier
+	Tam uint16          // topic alias maximum
+	Rs  strings.Builder // reason string
+	Sr  strings.Builder // server reference
+	Ri  strings.Builder // response information
+	Up  []StringPair    // user property
+	Sei uint32          // session expiry interval
+	Rri byte            // request response information
+	Ska uint16          // server keep alive
+	Wdi uint32          // will delay interval
+	Pfi byte            // payload format indicator
+	Mei uint32          // message expiry interval
+	Ct  strings.Builder // content type
+	Rt  strings.Builder // response topic
+	Cd  []byte          // correlation data
+	Si  uint32          // subscription identifier (var byte int)
+	Ta  uint16          // topic alias
 
 	// if 1, don't send
 	Wsa byte // wildcard subscription available
@@ -44,10 +44,10 @@ type Properties struct {
 var MalProps = errors.New("Malformed properties")
 var InvalidPropId = errors.New("Invalid property identifier")
 
-func DecodeProps(p *Properties, data []byte) (int, error) {
+func DecodeProps(p *Properties, data []byte) int {
 	l, offset, err := decodeVarByteInt(data)
 	if err != nil {
-		return offset, fmt.Errorf("%v: %v", MalProps, err)
+		return -1
 	}
 
 	end := offset + int(l)
@@ -60,18 +60,16 @@ func DecodeProps(p *Properties, data []byte) (int, error) {
 			p.Mei = binary.BigEndian.Uint32(data[offset+1 : offset+5])
 			offset += 5
 		case 3: // content type
-			ct, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			off := decodeUtf8(data[offset+1:], p.Ct)
+			if off == -1 {
+				return -1
 			}
-			p.Ct = ct
 			offset += off + 1
 		case 8: // response topic
-			rt, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			off := decodeUtf8(data[offset+1:], p.Rt)
+			if off == -1 {
+				return -1
 			}
-			p.Rt = rt
 			offset += off + 1
 		case 9: // correlation data
 			off := decodeBinary(data[offset+1:], p.Cd)
@@ -79,7 +77,7 @@ func DecodeProps(p *Properties, data []byte) (int, error) {
 		case 11: // subscription identifier
 			si, off, err := decodeVarByteInt(data[offset+1:])
 			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+				return -1
 			}
 			p.Si = si
 			offset += off + 1
@@ -87,21 +85,19 @@ func DecodeProps(p *Properties, data []byte) (int, error) {
 			p.Sei = binary.BigEndian.Uint32(data[offset+1 : offset+5])
 			offset += 5
 		case 18: // assigned client identifier
-			aci, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			off := decodeUtf8(data[offset+1:], p.Aci)
+			if off == -1 {
+				return -1
 			}
-			p.Aci = aci
 			offset += off + 1
 		case 19: // server keep alive
 			p.Ska = binary.BigEndian.Uint16(data[offset+1 : offset+3])
 			offset += 3
 		case 21: // authentication method
-			am, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			off := decodeUtf8(data[offset+1:], p.Am)
+			if off == -1 {
+				return -1
 			}
-			p.Am = am
 			offset += off + 1
 		case 22: // authentication data
 			off := decodeBinary(data[offset+1:], p.Ad)
@@ -116,25 +112,22 @@ func DecodeProps(p *Properties, data []byte) (int, error) {
 			p.Rri = data[offset+1]
 			offset += 2
 		case 26: // response information
-			ri, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			off := decodeUtf8(data[offset+1:], p.Ri)
+			if off == -1 {
+				return -1
 			}
-			p.Ri = ri
 			offset += off + 1
 		case 28: // server reference
-			sr, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			off := decodeUtf8(data[offset+1:], p.Sr)
+			if off == -1 {
+				return -1
 			}
-			p.Sr = sr
 			offset += off + 1
 		case 31: // reason string
-			rs, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			off := decodeUtf8(data[offset+1:], p.Rs)
+			if off == -1 {
+				return -1
 			}
-			p.Rs = rs
 			offset += off + 1
 		case 33: // receive maximum
 			p.Rm = binary.BigEndian.Uint16(data[offset+1 : offset+3])
@@ -152,17 +145,18 @@ func DecodeProps(p *Properties, data []byte) (int, error) {
 			p.Ra = data[offset+1]
 			offset += 2
 		case 38: // user property
-			nameStr, off, err := decodeUtf8(data[offset+1:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			var sp StringPair
+			off := decodeUtf8(data[offset+1:], sp.name)
+			if off == -1 {
+				return -1
 			}
 			offset += off + 1
-			valStr, off, err := decodeUtf8(data[offset:])
-			if err != nil {
-				return offset, fmt.Errorf("%v: %v", MalProps, err)
+			off = decodeUtf8(data[offset:], sp.val)
+			if off == -1 {
+				return -1
 			}
 			offset += off + 1
-			p.Up = append(p.Up, StringPair{name: nameStr, val: valStr})
+			p.Up = append(p.Up, sp)
 		case 39: // maximum packet size
 			p.Mps = binary.BigEndian.Uint32(data[offset+1 : offset+5])
 			offset += 5
@@ -178,7 +172,7 @@ func DecodeProps(p *Properties, data []byte) (int, error) {
 		}
 	}
 
-	return offset, nil
+	return offset
 }
 
 func EncodeProps(p *Properties, buf []byte, scratch []byte) int {
@@ -194,9 +188,9 @@ func EncodeProps(p *Properties, buf []byte, scratch []byte) int {
 		copy(scratch[l+3:], p.Ad)
 		l += len(p.Ad) + 3
 	}
-	if p.Am != "" {
+	if p.Am.Len() > 0 {
 		scratch[l] = 21
-		ll := encodeUtf8(scratch[l+1:], p.Am)
+		ll := encodeUtf8(scratch[l+1:], p.Am.String())
 		l += ll + 1
 	}
 	if p.Rm != 0 {
@@ -204,9 +198,9 @@ func EncodeProps(p *Properties, buf []byte, scratch []byte) int {
 		binary.BigEndian.PutUint16(scratch[l+1:l+3], p.Rm)
 		l += 3
 	}
-	if p.Aci != "" {
+	if p.Aci.Len() > 0 {
 		scratch[l] = 18
-		ll := encodeUtf8(scratch[l+1:], p.Aci)
+		ll := encodeUtf8(scratch[l+1:], p.Aci.String())
 		l += ll + 1
 	}
 	if p.Tam != 0 {
@@ -214,25 +208,25 @@ func EncodeProps(p *Properties, buf []byte, scratch []byte) int {
 		binary.BigEndian.PutUint16(scratch[l+1:l+3], p.Tam)
 		l += 3
 	}
-	if p.Rs != "" {
+	if p.Rs.Len() > 0 {
 		scratch[l] = 31
-		ll := encodeUtf8(scratch[l+1:], p.Rs)
+		ll := encodeUtf8(scratch[l+1:], p.Rs.String())
 		l += ll + 1
 	}
-	if p.Sr != "" {
+	if p.Sr.Len() > 0 {
 		scratch[l] = 28
-		ll := encodeUtf8(scratch[l+1:], p.Sr)
+		ll := encodeUtf8(scratch[l+1:], p.Sr.String())
 		l += ll + 1
 	}
-	if p.Ri != "" {
+	if p.Ri.Len() > 0 {
 		scratch[l] = 26
-		ll := encodeUtf8(scratch[l+1:], p.Ri)
+		ll := encodeUtf8(scratch[l+1:], p.Ri.String())
 		l += ll + 1
 	}
 	for _, up := range p.Up {
 		scratch[l] = 38
-		lln := encodeUtf8(scratch[l+1:], up.name)
-		llv := encodeUtf8(scratch[lln+1:], up.val)
+		lln := encodeUtf8(scratch[l+1:], up.name.String())
+		llv := encodeUtf8(scratch[lln+1:], up.val.String())
 		l += lln + llv + 1
 	}
 	if p.Sei != 0 {
@@ -265,14 +259,14 @@ func EncodeProps(p *Properties, buf []byte, scratch []byte) int {
 		binary.BigEndian.PutUint32(scratch[l+1:l+5], p.Mei)
 		l += 5
 	}
-	if p.Ct != "" {
+	if p.Ct.Len() > 0 {
 		scratch[l] = 3
-		ll := encodeUtf8(scratch[l+1:], p.Ct)
+		ll := encodeUtf8(scratch[l+1:], p.Ct.String())
 		l += ll + 1
 	}
-	if p.Rt != "" {
+	if p.Rt.Len() > 0 {
 		scratch[l] = 8
-		ll := encodeUtf8(scratch[l+1:], p.Rt)
+		ll := encodeUtf8(scratch[l+1:], p.Rt.String())
 		l += ll + 1
 	}
 	if len(p.Cd) != 0 {
@@ -332,13 +326,13 @@ func (p *Properties) Zero() {
 	p.Mps = 0
 	clear(p.Ad)
 	p.Ad = p.Ad[:0]
-	p.Am = ""
+	p.Am.Reset()
 	p.Rm = 0
-	p.Aci = ""
+	p.Aci.Reset()
 	p.Tam = 0
-	p.Rs = ""
-	p.Sr = ""
-	p.Ri = ""
+	p.Rs.Reset()
+	p.Sr.Reset()
+	p.Ri.Reset()
 	clear(p.Up)
 	p.Up = p.Up[:0]
 	p.Sei = 0
@@ -347,8 +341,8 @@ func (p *Properties) Zero() {
 	p.Wdi = 0
 	p.Pfi = 0
 	p.Mei = 0
-	p.Ct = ""
-	p.Rt = ""
+	p.Ct.Reset()
+	p.Rt.Reset()
 	clear(p.Cd)
 	p.Cd = p.Cd[:0]
 	p.Si = 0

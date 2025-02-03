@@ -4,15 +4,16 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type Connect struct {
-	Id          string
-	Username    string
+	Id          strings.Builder
+	Username    strings.Builder
 	Password    []byte
 	Keepalive   uint16
 	Flags       byte
-	WillTopic   string
+	WillTopic   strings.Builder
 	WillPayload []byte
 }
 
@@ -28,11 +29,12 @@ func DecodeConnect(
 	props *Properties,
 	willProps *Properties,
 ) error {
-	protocolName, offset, err := decodeUtf8(data)
-	if err != nil {
-		return fmt.Errorf("%v: %v", MalConnPacket, err)
+	var protocolName strings.Builder
+	offset := decodeUtf8(data, protocolName)
+	if offset == -1 {
+		return MalConnPacket
 	}
-	if protocolName != "MQTT" {
+	if protocolName.String() != "MQTT" {
 		return fmt.Errorf("%v: %v", MalConnPacket, UnsupProtoc)
 	}
 
@@ -51,30 +53,30 @@ func DecodeConnect(
 	connect.Keepalive = binary.BigEndian.Uint16(rest[2:4])
 	rest = rest[4:]
 
-	offset, err = DecodeProps(props, rest)
-	if err != nil {
-		return fmt.Errorf("%v: %v", MalConnPacket, err)
+	offset = DecodeProps(props, rest)
+	if offset == -1 {
+		return MalConnPacket
 	}
 	rest = rest[offset:]
 
 	// client id
-	connect.Id, offset, err = decodeUtf8(rest)
-	if err != nil {
-		return fmt.Errorf("%v: %v", MalConnPacket, err)
+	offset = decodeUtf8(rest, connect.Id)
+	if offset == -1 {
+		return MalConnPacket
 	}
 	rest = rest[offset:]
 
 	// will props
 	if connect.Flags&0b00000100 != 0 {
-		offset, err = DecodeProps(willProps, rest)
-		if err != nil {
-			return fmt.Errorf("%v: %v", MalConnPacket, err)
+		offset = DecodeProps(willProps, rest)
+		if offset == -1 {
+			return MalConnPacket
 		}
 		rest = rest[offset:]
 
-		connect.WillTopic, offset, err = decodeUtf8(rest)
-		if err != nil {
-			return fmt.Errorf("%v: %v", MalConnPacket, err)
+		offset = decodeUtf8(rest, connect.WillTopic)
+		if offset == -1 {
+			return MalConnPacket
 		}
 		rest = rest[offset:]
 
@@ -84,9 +86,9 @@ func DecodeConnect(
 
 	// username
 	if connect.Flags&0b10000000 != 0 {
-		connect.Username, offset, err = decodeUtf8(rest)
-		if err != nil {
-			return fmt.Errorf("%v: %v", MalConnPacket, err)
+		offset = decodeUtf8(rest, connect.Username)
+		if offset == -1 {
+			return MalConnPacket
 		}
 		rest = rest[offset:]
 	}
@@ -99,13 +101,13 @@ func DecodeConnect(
 }
 
 func (c *Connect) Zero() {
-	c.Username = ""
+	c.Username.Reset()
 	clear(c.Password)
 	c.Password = c.Password[:0]
-	c.Id = ""
+	c.Id.Reset()
 	c.Keepalive = 0
 	c.Flags = 0
-	c.WillTopic = ""
+	c.WillTopic.Reset()
 	clear(c.WillPayload)
 	c.WillPayload = c.WillPayload[:0]
 }

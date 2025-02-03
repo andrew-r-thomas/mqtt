@@ -310,7 +310,6 @@ func readPump(
 		for n < int(fh.RemLen)+offset {
 			// didn't read enough
 			b := bp.GetBuf()
-			defer bp.ReturnBuf(b)
 
 			nn, err := conn.Read(b)
 			if err != nil {
@@ -322,6 +321,8 @@ func readPump(
 
 			n += nn
 			buf = append(buf, b...)
+
+			bp.ReturnBuf(b)
 		}
 
 		sender <- Packet{fh: fh, buf: buf[:n]}
