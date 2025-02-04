@@ -10,17 +10,43 @@ import (
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
+	"github.com/google/uuid"
 )
 
-const clients = 3
+const clients = 1
+
+var duration = time.Second * 10
 
 func main() {
+	stampChan := make(chan timeStamp)
+
 	for range clients {
-		go runClient()
+		id := uuid.New().String()
+		go runClient(duration, id, stampChan)
 	}
+
+	resChan := make(chan time.Duration, 1)
+	go collectStats(stampChan, resChan)
+
+	avgLatency := <-resChan
+	log.Printf("average latency: %v\n", avgLatency)
 }
 
-func runClient() {
+type EventType byte
+
+const (
+	MsgSend EventType = iota
+	MsgRecv
+)
+
+type timeStamp struct {
+	t     time.Time
+	id    uint32
+	eType EventType
+}
+
+func runClient(dur time.Duration, id string, times chan<- timeStamp) {
+	log.Printf("running client\n")
 	conn, err := net.Dial("tcp", ":1883")
 	if err != nil {
 		log.Fatalf("error dialing broker: %v\n", err)
@@ -31,16 +57,13 @@ func runClient() {
 			p paho.PublishReceived,
 		) (bool, error){
 			func(p paho.PublishReceived) (bool, error) {
-				lat_i := binary.BigEndian.Uint64(
-					p.Packet.Payload[:8],
-				)
-				long_i := binary.BigEndian.Uint64(
-					p.Packet.Payload[8:],
-				)
-				lat := math.Float64frombits(lat_i)
-				long := math.Float64frombits(long_i)
-				log.Printf("recieved lat is: %f\n", lat)
-				log.Printf("recieved long is: %f\n", long)
+				t := time.Now()
+				id := binary.BigEndian.Uint32(p.Packet.Payload[:4])
+				times <- timeStamp{
+					t:     t,
+					eType: MsgRecv,
+					id:    id,
+				}
 				return true, nil
 			},
 		},
@@ -48,12 +71,11 @@ func runClient() {
 	})
 
 	ctx := context.Background()
-
 	_, err = client.Connect(
 		ctx,
 		&paho.Connect{
 			KeepAlive:    30,
-			ClientID:     "this is a test",
+			ClientID:     id,
 			CleanStart:   true,
 			UsernameFlag: false,
 			PasswordFlag: false,
@@ -80,28 +102,74 @@ func runClient() {
 		log.Fatalf("error subscribing: %v\n", err)
 	}
 
+	log.Printf("sending msgs for %v\n", dur)
+	to := time.After(dur)
+	var pid uint32 = 0
 	for {
-		lat := rand.Float64()
-		long := rand.Float64()
-		log.Printf("sent lat is: %f\n", lat)
-		log.Printf("sent long is: %f\n", long)
+		select {
+		case <-to:
+			log.Printf("disconnecting\n")
+			err = client.Disconnect(&paho.Disconnect{ReasonCode: 0})
+			conn.Close()
+			if err != nil {
+				log.Fatalf("error disconnecting: %v\n", err)
+			}
+			close(times)
+			return
+		default:
+			lat := rand.Float64()
+			long := rand.Float64()
 
-		payload := make([]byte, 16)
-		binary.BigEndian.PutUint64(payload[:8], math.Float64bits(lat))
-		binary.BigEndian.PutUint64(payload[8:], math.Float64bits(long))
+			payload := make([]byte, 20)
+			binary.BigEndian.PutUint32(payload[:4], pid)
+			binary.BigEndian.PutUint64(payload[4:12], math.Float64bits(lat))
+			binary.BigEndian.PutUint64(payload[12:], math.Float64bits(long))
 
-		_, err := client.Publish(
-			ctx,
-			&paho.Publish{
+			pub := &paho.Publish{
 				Topic:   "test",
 				QoS:     0,
 				Payload: payload,
-			},
-		)
-		if err != nil {
-			log.Fatalf("error publishing: %v\n", err)
-		}
+			}
 
-		time.Sleep(time.Second)
+			sendTime := time.Now()
+			_, err := client.Publish(ctx, pub)
+			if err != nil {
+				log.Fatalf("error publishing: %v\n", err)
+			}
+
+			times <- timeStamp{
+				t:     sendTime,
+				eType: MsgSend,
+				id:    pid,
+			}
+
+			pid++
+
+			time.Sleep(time.Second)
+		}
 	}
+}
+
+func collectStats(stamps <-chan timeStamp, resChan chan<- time.Duration) {
+	sents := map[uint32]time.Time{}
+	var avgLatency time.Duration
+	n := 0
+
+	log.Printf("starting stamp collection\n")
+	for stamp := range stamps {
+		switch stamp.eType {
+		case MsgSend:
+			sents[stamp.id] = stamp.t
+		case MsgRecv:
+			latency := stamp.t.Sub(sents[stamp.id])
+			log.Printf("latency: %v\n", latency)
+			avgLatency += latency
+			n++
+			delete(sents, stamp.id)
+		}
+	}
+
+	avgLatency /= time.Duration(n)
+
+	resChan <- avgLatency
 }
