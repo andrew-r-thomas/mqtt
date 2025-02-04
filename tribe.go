@@ -1,5 +1,7 @@
 package mqtt
 
+import "log"
+
 type TribeMsgType byte
 
 const (
@@ -31,13 +33,11 @@ func StartTribeManager(recv <-chan TribeMsg) {
 			msgData := msg.MsgData.(AddMemberMsg)
 			senders = append(senders, msgData.Sender)
 		case SendMsg:
+			log.Printf("got send msg\n")
 			msgData := msg.MsgData.(SendMsgMsg)
-			sIdx := cidMap[msg.ClientId]
-			for i := 0; i < sIdx; i++ {
-				senders[i] <- msgData.Data
-			}
-			for i := sIdx + 1; i < len(senders); i++ {
-				senders[i] <- msgData.Data
+			// TODO: figure out if we're going to send or not
+			for _, s := range senders {
+				s <- msgData.Data
 			}
 		}
 	}

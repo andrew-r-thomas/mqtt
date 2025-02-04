@@ -121,7 +121,7 @@ func encodeVarByteInt(buf []byte, num int) int {
 var InvalidUtf8 = errors.New("Invalid utf8 string")
 
 // str must be empty when passed to this function
-func decodeUtf8(data []byte, str strings.Builder) int {
+func decodeUtf8(data []byte, str *strings.Builder) int {
 	// check for safe slice indexing
 	if len(data) <= 2 {
 		return -1

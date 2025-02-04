@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 )
 
@@ -30,10 +31,11 @@ func DecodeConnect(
 	willProps *Properties,
 ) error {
 	var protocolName strings.Builder
-	offset := decodeUtf8(data, protocolName)
+	offset := decodeUtf8(data, &protocolName)
 	if offset == -1 {
 		return MalConnPacket
 	}
+	log.Printf("protocol name: %s\n", protocolName.String())
 	if protocolName.String() != "MQTT" {
 		return fmt.Errorf("%v: %v", MalConnPacket, UnsupProtoc)
 	}
@@ -60,7 +62,7 @@ func DecodeConnect(
 	rest = rest[offset:]
 
 	// client id
-	offset = decodeUtf8(rest, connect.Id)
+	offset = decodeUtf8(rest, &connect.Id)
 	if offset == -1 {
 		return MalConnPacket
 	}
@@ -74,7 +76,7 @@ func DecodeConnect(
 		}
 		rest = rest[offset:]
 
-		offset = decodeUtf8(rest, connect.WillTopic)
+		offset = decodeUtf8(rest, &connect.WillTopic)
 		if offset == -1 {
 			return MalConnPacket
 		}
@@ -86,7 +88,7 @@ func DecodeConnect(
 
 	// username
 	if connect.Flags&0b10000000 != 0 {
-		offset = decodeUtf8(rest, connect.Username)
+		offset = decodeUtf8(rest, &connect.Username)
 		if offset == -1 {
 			return MalConnPacket
 		}

@@ -60,13 +60,13 @@ func DecodeProps(p *Properties, data []byte) int {
 			p.Mei = binary.BigEndian.Uint32(data[offset+1 : offset+5])
 			offset += 5
 		case 3: // content type
-			off := decodeUtf8(data[offset+1:], p.Ct)
+			off := decodeUtf8(data[offset+1:], &p.Ct)
 			if off == -1 {
 				return -1
 			}
 			offset += off + 1
 		case 8: // response topic
-			off := decodeUtf8(data[offset+1:], p.Rt)
+			off := decodeUtf8(data[offset+1:], &p.Rt)
 			if off == -1 {
 				return -1
 			}
@@ -85,7 +85,7 @@ func DecodeProps(p *Properties, data []byte) int {
 			p.Sei = binary.BigEndian.Uint32(data[offset+1 : offset+5])
 			offset += 5
 		case 18: // assigned client identifier
-			off := decodeUtf8(data[offset+1:], p.Aci)
+			off := decodeUtf8(data[offset+1:], &p.Aci)
 			if off == -1 {
 				return -1
 			}
@@ -94,7 +94,7 @@ func DecodeProps(p *Properties, data []byte) int {
 			p.Ska = binary.BigEndian.Uint16(data[offset+1 : offset+3])
 			offset += 3
 		case 21: // authentication method
-			off := decodeUtf8(data[offset+1:], p.Am)
+			off := decodeUtf8(data[offset+1:], &p.Am)
 			if off == -1 {
 				return -1
 			}
@@ -112,19 +112,19 @@ func DecodeProps(p *Properties, data []byte) int {
 			p.Rri = data[offset+1]
 			offset += 2
 		case 26: // response information
-			off := decodeUtf8(data[offset+1:], p.Ri)
+			off := decodeUtf8(data[offset+1:], &p.Ri)
 			if off == -1 {
 				return -1
 			}
 			offset += off + 1
 		case 28: // server reference
-			off := decodeUtf8(data[offset+1:], p.Sr)
+			off := decodeUtf8(data[offset+1:], &p.Sr)
 			if off == -1 {
 				return -1
 			}
 			offset += off + 1
 		case 31: // reason string
-			off := decodeUtf8(data[offset+1:], p.Rs)
+			off := decodeUtf8(data[offset+1:], &p.Rs)
 			if off == -1 {
 				return -1
 			}
@@ -146,12 +146,12 @@ func DecodeProps(p *Properties, data []byte) int {
 			offset += 2
 		case 38: // user property
 			var sp StringPair
-			off := decodeUtf8(data[offset+1:], sp.name)
+			off := decodeUtf8(data[offset+1:], &sp.name)
 			if off == -1 {
 				return -1
 			}
 			offset += off + 1
-			off = decodeUtf8(data[offset:], sp.val)
+			off = decodeUtf8(data[offset:], &sp.val)
 			if off == -1 {
 				return -1
 			}

@@ -22,7 +22,7 @@ func DecodePublish(
 	props *Properties,
 	data []byte,
 ) error {
-	l := decodeUtf8(data, publish.Topic)
+	l := decodeUtf8(data, &publish.Topic)
 	if l == -1 {
 		return MalPubPacket
 	}

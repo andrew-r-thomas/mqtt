@@ -11,21 +11,24 @@ import (
 type Server struct {
 	addr string
 
-	bp BufPool
-	fp FHPool
+	bp *BufPool
+	fp *FHPool
 
-	tribes sync.Map
+	tribes *sync.Map
 }
 
+const DefaultBufSize = 1024
+
 func NewServer(addr string) Server {
-	bp := NewBufPool(1000, 1024) // 1mb
-	fp := NewFHPool(1000)
+	tribes := new(sync.Map)
 
 	return Server{
 		addr: addr,
 
-		bp: bp,
-		fp: fp,
+		bp: NewBufPool(DefaultBufSize),
+		fp: NewFHPool(),
+
+		tribes: tribes,
 	}
 }
 
@@ -89,8 +92,9 @@ func (s *Server) handleClient(conn net.Conn) {
 						filter.Filter.String(),
 						tribeChan,
 					)
+				} else {
+					tribeChan = val.(chan TribeMsg)
 				}
-				tribeChan = val.(chan TribeMsg)
 				tribeChan <- TribeMsg{
 					MsgType:  AddMember,
 					ClientId: connect.Id.String(),
@@ -107,15 +111,14 @@ func (s *Server) handleClient(conn net.Conn) {
 			props.Zero()
 			clear(p.buf)
 			scratch := s.bp.GetBuf()
-
 			i := packets.EncodeSuback(
 				&suback,
 				&props,
 				p.buf,
 				scratch,
 			)
-
 			s.bp.ReturnBuf(scratch)
+
 			writeChan <- p.buf[:i]
 		case packets.PUBLISH:
 			props := packets.Properties{}
@@ -124,7 +127,7 @@ func (s *Server) handleClient(conn net.Conn) {
 			pub.Zero()
 
 			packets.DecodePublish(
-				&p.fh,
+				p.fh,
 				&pub,
 				&props,
 				p.buf[offset:],
@@ -158,7 +161,7 @@ func (s *Server) readPump(conn net.Conn, send chan<- Packet) {
 			log.Fatalf("error reading from conn! %v\n", err)
 		}
 
-		offset := packets.DecodeFixedHeader(&fh, buf)
+		offset := packets.DecodeFixedHeader(fh, buf)
 		if offset == -1 {
 			log.Fatalf("error decoding fixed header\n")
 		}
@@ -183,8 +186,8 @@ func (s *Server) readPump(conn net.Conn, send chan<- Packet) {
 
 		send <- Packet{fh: fh, buf: buf[:n]}
 
-		// TODO:
 		if fh.Pt == packets.DISCONNECT {
+			// TODO:
 			return
 		}
 	}
@@ -214,7 +217,7 @@ func (s *Server) setupClient(
 	if err != nil {
 		log.Fatalf("error reading from conn: %v\n", err)
 	}
-	offset := packets.DecodeFixedHeader(&fh, buf)
+	offset := packets.DecodeFixedHeader(fh, buf)
 	if offset == -1 {
 		log.Fatalf("error decoding fixed header\n")
 	}
@@ -271,6 +274,6 @@ func (s *Server) setupClient(
 }
 
 type Packet struct {
-	fh  packets.FixedHeader
+	fh  *packets.FixedHeader
 	buf []byte // this is the whole buffer, including the fixed header
 }

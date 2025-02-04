@@ -26,7 +26,7 @@ func DecodeUnsubscribe(u *Unsubscribe, props *Properties, data []byte) error {
 	offset = 0
 	for offset < len(rest) {
 		var tf strings.Builder
-		off := decodeUtf8(rest[offset:], tf)
+		off := decodeUtf8(rest[offset:], &tf)
 		if off == -1 {
 			return MalUnsubPacket
 		}

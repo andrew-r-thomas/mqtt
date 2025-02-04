@@ -32,7 +32,7 @@ func DecodeSubscribe(s *Subscribe, props *Properties, data []byte) error {
 	for offset < len(rest) {
 		var tf TopicFilter
 		// decode topic filters
-		off := decodeUtf8(rest[offset:], tf.Filter)
+		off := decodeUtf8(rest[offset:], &tf.Filter)
 		if off == -1 {
 			return MalSubPacket
 		}
