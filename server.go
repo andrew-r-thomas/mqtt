@@ -21,12 +21,14 @@ const DefaultBufSize = 1024
 
 func NewServer(addr string) Server {
 	tribes := new(sync.Map)
+	bp := NewBufPool(100, DefaultBufSize)
+	fp := NewFHPool(100)
 
 	return Server{
 		addr: addr,
 
-		bp: NewBufPool(DefaultBufSize),
-		fp: NewFHPool(),
+		bp: &bp,
+		fp: &fp,
 
 		tribes: tribes,
 	}
@@ -50,11 +52,12 @@ func (s *Server) Start() error {
 
 func (s *Server) handleClient(conn net.Conn) {
 	connect, _ := s.setupClient(conn)
+	log.Printf("%s: connected\n", connect.Id.String())
 
-	readChan := make(chan Packet, 10)
-	writeChan := make(chan []byte, 10)
-	go s.readPump(conn, readChan)
-	go s.writePump(conn, writeChan)
+	readChan := make(chan Packet, 100)
+	writeChan := make(chan []byte, 100)
+	go s.readPump(conn, readChan, connect.Id.String())
+	go s.writePump(conn, writeChan, connect.Id.String())
 
 	for p := range readChan {
 		offset := len(p.buf) - int(p.fh.RemLen)
@@ -66,32 +69,33 @@ func (s *Server) handleClient(conn net.Conn) {
 			p.buf[1] = 0
 			writeChan <- p.buf[:2]
 		case packets.SUBSCRIBE:
+			log.Printf("%s: got sub packet\n", connect.Id.String())
 			props := packets.Properties{}
 			props.Zero()
 			sub := packets.Subscribe{}
 			sub.Zero()
 
-			packets.DecodeSubscribe(
+			err := packets.DecodeSubscribe(
 				&sub,
 				&props,
 				p.buf[offset:],
 			)
-
+			if err != nil {
+				log.Fatalf("%s: error decoding subscribe packet: %v\n", connect.Id.String(), err)
+			} else {
+				log.Printf("%s: decoded subscribe\n", connect.Id.String())
+			}
 			suback := packets.Suback{}
 			suback.Zero()
 
 			for _, filter := range sub.TopicFilters {
-				var tribeChan chan TribeMsg
-				val, ok := s.tribes.Load(
+				var tribeChan = make(chan TribeMsg, 100)
+				val, ok := s.tribes.LoadOrStore(
 					filter.Filter.String(),
+					tribeChan,
 				)
 				if !ok {
-					tribeChan = make(chan TribeMsg, 10)
 					go StartTribeManager(tribeChan)
-					s.tribes.Store(
-						filter.Filter.String(),
-						tribeChan,
-					)
 				} else {
 					tribeChan = val.(chan TribeMsg)
 				}
@@ -142,28 +146,32 @@ func (s *Server) handleClient(conn net.Conn) {
 					Data: p.buf,
 				},
 			}
+		case packets.DISCONNECT:
+			close(writeChan)
+			return
 		default:
 			log.Fatalf(
-				"invalid packet type: %s\n",
+				"invalid packet type from %s: %s\n",
+				connect.Id.String(),
 				p.fh.Pt.String(),
 			)
 		}
 	}
 }
 
-func (s *Server) readPump(conn net.Conn, send chan<- Packet) {
+func (s *Server) readPump(conn net.Conn, send chan<- Packet, id string) {
 	for {
 		fh := s.fp.GetFH()
 		buf := s.bp.GetBuf()
 
 		n, err := conn.Read(buf)
 		if err != nil {
-			log.Fatalf("error reading from conn! %v\n", err)
+			log.Fatalf("error reading from %s conn! %v\n", id, err)
 		}
 
-		offset := packets.DecodeFixedHeader(fh, buf)
+		offset := packets.DecodeFixedHeader(&fh, buf)
 		if offset == -1 {
-			log.Fatalf("error decoding fixed header\n")
+			log.Fatalf("error decoding fixed header from %s\n", id)
 		}
 
 		for n < int(fh.RemLen)+offset {
@@ -173,7 +181,8 @@ func (s *Server) readPump(conn net.Conn, send chan<- Packet) {
 			nn, err := conn.Read(b)
 			if err != nil {
 				log.Fatalf(
-					"error reading from conn: %v\n",
+					"error reading from %s conn: %v\n",
+					id,
 					err,
 				)
 			}
@@ -184,7 +193,7 @@ func (s *Server) readPump(conn net.Conn, send chan<- Packet) {
 			s.bp.ReturnBuf(b)
 		}
 
-		send <- Packet{fh: fh, buf: buf[:n]}
+		send <- Packet{fh: &fh, buf: buf[:n]}
 
 		if fh.Pt == packets.DISCONNECT {
 			// TODO:
@@ -193,14 +202,14 @@ func (s *Server) readPump(conn net.Conn, send chan<- Packet) {
 	}
 }
 
-func (s *Server) writePump(conn net.Conn, recv <-chan []byte) {
+func (s *Server) writePump(conn net.Conn, recv <-chan []byte, id string) {
 	for buf := range recv {
 		n, err := conn.Write(buf)
 		if err != nil {
-			log.Fatalf("error writting to conn: %v\n", err)
+			log.Fatalf("error writting to %s conn: %v\n", id, err)
 		}
 		if n != len(buf) {
-			log.Fatalf("did not write full buf\n")
+			log.Fatalf("did not write full buf to %s\n", id)
 		}
 		s.bp.ReturnBuf(buf)
 	}
@@ -217,7 +226,7 @@ func (s *Server) setupClient(
 	if err != nil {
 		log.Fatalf("error reading from conn: %v\n", err)
 	}
-	offset := packets.DecodeFixedHeader(fh, buf)
+	offset := packets.DecodeFixedHeader(&fh, buf)
 	if offset == -1 {
 		log.Fatalf("error decoding fixed header\n")
 	}

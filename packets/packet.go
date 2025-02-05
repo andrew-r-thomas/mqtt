@@ -92,7 +92,7 @@ func decodeVarByteInt(data []byte) (uint32, int) {
 
 		b := data[i]
 		// PERF: making a u32 every time, maybe can keep things at byte level
-		val += (uint32(b) & 127) * mult
+		val += uint32(b&127) * mult
 		mult *= 128
 		i += 1
 

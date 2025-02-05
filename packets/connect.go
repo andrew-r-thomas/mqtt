@@ -4,7 +4,6 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 )
 
@@ -35,7 +34,6 @@ func DecodeConnect(
 	if offset == -1 {
 		return MalConnPacket
 	}
-	log.Printf("protocol name: %s\n", protocolName.String())
 	if protocolName.String() != "MQTT" {
 		return fmt.Errorf("%v: %v", MalConnPacket, UnsupProtoc)
 	}

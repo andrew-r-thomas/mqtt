@@ -3,6 +3,7 @@ package packets
 import (
 	"encoding/binary"
 	"errors"
+	"log"
 	"strings"
 )
 
@@ -49,6 +50,8 @@ func DecodeProps(p *Properties, data []byte) int {
 	if offset == -1 {
 		return -1
 	}
+	log.Printf("l: %d\n", l)
+	log.Printf("offset: %d\n", offset)
 
 	end := offset + int(l)
 	for offset < end {
@@ -169,6 +172,8 @@ func DecodeProps(p *Properties, data []byte) int {
 		case 42: // shared subscription available
 			p.Ssa = data[offset+1]
 			offset += 2
+		default:
+			log.Fatalf("bad prop code: %d\n", data[offset])
 		}
 	}
 

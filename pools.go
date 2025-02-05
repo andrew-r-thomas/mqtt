@@ -1,55 +1,66 @@
 package mqtt
 
-import (
-	"sync"
-
-	"github.com/andrew-r-thomas/mqtt/packets"
-)
+import "github.com/andrew-r-thomas/mqtt/packets"
 
 type BufPool struct {
-	pool sync.Pool
+	bufCap int
+	pool   chan []byte
 }
 
-func NewBufPool(bufCap int) *BufPool {
-	return &BufPool{
-		pool: sync.Pool{
-			New: func() any {
-				buf := make([]byte, bufCap)
-				return &buf
-			},
-		},
+func NewBufPool(capacity int, bufCap int) BufPool {
+	pool := make(chan []byte, capacity)
+	for range capacity {
+		pool <- make([]byte, bufCap)
+	}
+	return BufPool{pool: pool, bufCap: bufCap}
+}
+
+func (bp *BufPool) GetBuf() []byte {
+	select {
+	case buf := <-bp.pool:
+		return buf
+	default:
+		return make([]byte, bp.bufCap)
 	}
 }
-func (bp *BufPool) GetBuf() []byte {
-	buf := bp.pool.Get().(*[]byte)
-	return *buf
-}
+
 func (bp *BufPool) ReturnBuf(buf []byte) {
 	clear(buf)
-	bp.pool.Put(&buf)
+	select {
+	case bp.pool <- buf[:min(bp.bufCap, len(buf))]:
+	default:
+	}
 }
 
 type FHPool struct {
-	pool sync.Pool
+	pool chan packets.FixedHeader
 }
 
-func NewFHPool() *FHPool {
-	return &FHPool{
-		pool: sync.Pool{
-			New: func() any {
-				fh := new(packets.FixedHeader)
-				fh.Zero()
-				return fh
-			},
-		},
+func NewFHPool(capacity int) FHPool {
+	pool := make(chan packets.FixedHeader, capacity)
+	for range capacity {
+		fh := packets.FixedHeader{}
+		fh.Zero()
+		pool <- fh
+	}
+	return FHPool{pool: pool}
+}
+
+func (fp *FHPool) GetFH() packets.FixedHeader {
+	select {
+	case fh := <-fp.pool:
+		return fh
+	default:
+		fh := packets.FixedHeader{}
+		fh.Zero()
+		return fh
 	}
 }
 
-func (fp *FHPool) GetFH() *packets.FixedHeader {
-	return fp.pool.Get().(*packets.FixedHeader)
-}
-
-func (fp *FHPool) ReturnFH(fh *packets.FixedHeader) {
+func (fp *FHPool) ReturnFH(fh packets.FixedHeader) {
 	fh.Zero()
-	fp.pool.Put(fh)
+	select {
+	case fp.pool <- fh:
+	default:
+	}
 }
