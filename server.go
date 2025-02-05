@@ -67,9 +67,9 @@ func (s *Server) handleClient(conn net.Conn) {
 			clear(p.buf)
 			p.buf[0] = 0b11010000
 			p.buf[1] = 0
+			log.Printf("%s: sending ping resp\n", connect.Id.String())
 			writeChan <- p.buf[:2]
 		case packets.SUBSCRIBE:
-			log.Printf("%s: got sub packet\n", connect.Id.String())
 			props := packets.Properties{}
 			props.Zero()
 			sub := packets.Subscribe{}
@@ -168,7 +168,6 @@ func (s *Server) readPump(conn net.Conn, send chan<- Packet, id string) {
 		if err != nil {
 			log.Fatalf("error reading from %s conn! %v\n", id, err)
 		}
-
 		offset := packets.DecodeFixedHeader(&fh, buf)
 		if offset == -1 {
 			log.Fatalf("error decoding fixed header from %s\n", id)
@@ -204,6 +203,7 @@ func (s *Server) readPump(conn net.Conn, send chan<- Packet, id string) {
 
 func (s *Server) writePump(conn net.Conn, recv <-chan []byte, id string) {
 	for buf := range recv {
+		log.Printf("%s: writing buf\n", id)
 		n, err := conn.Write(buf)
 		if err != nil {
 			log.Fatalf("error writting to %s conn: %v\n", id, err)
