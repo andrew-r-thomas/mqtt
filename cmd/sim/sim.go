@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/binary"
 	"log"
-	// "math"
-	// "math/rand/v2"
+	"math"
+	"math/rand/v2"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/eclipse/paho.golang/paho"
@@ -18,21 +19,27 @@ const clients = 5
 var duration = time.Second * 10
 
 func main() {
+	var wg sync.WaitGroup
 	stampChan := make(chan timeStamp)
 
 	for range clients {
-		time.Sleep(time.Second)
-		id := uuid.New().String()
-		go runClient(duration, id, stampChan)
+		wg.Add(1)
+		go func() {
+			time.Sleep(time.Second)
+			id := uuid.New().String()
+			runClient(duration, id, stampChan)
+			wg.Done()
+		}()
 	}
 
-	// resChan := make(chan time.Duration, 1)
-	// go collectStats(stampChan, resChan)
+	resChan := make(chan time.Duration, 1)
+	go collectStats(stampChan, resChan)
 
-	// avgLatency := <-resChan
-	// log.Printf("average latency: %v\n", avgLatency)
-	for {
-	}
+	wg.Wait()
+	close(stampChan)
+
+	avgLatency := <-resChan
+	log.Printf("average latency: %v\n", avgLatency)
 }
 
 type EventType byte
@@ -55,10 +62,14 @@ func runClient(dur time.Duration, id string, times chan<- timeStamp) {
 	}
 
 	client := paho.NewClient(paho.ClientConfig{
+		OnClientError: func(err error) {
+			log.Printf("%s: client error: %v\n", id, err)
+		},
 		OnPublishReceived: []func(
 			p paho.PublishReceived,
 		) (bool, error){
 			func(p paho.PublishReceived) (bool, error) {
+				log.Printf("%s: received pub\n", id)
 				t := time.Now()
 				id := binary.BigEndian.Uint32(p.Packet.Payload[:4])
 				times <- timeStamp{
@@ -109,11 +120,11 @@ func runClient(dur time.Duration, id string, times chan<- timeStamp) {
 	}
 
 	to := time.After(dur)
-	// var pid uint32 = 0
+	var pid uint32 = 0
 	for {
+		time.Sleep(time.Second)
 		select {
 		case <-to:
-			log.Printf("disconnecting\n")
 			err = client.Disconnect(&paho.Disconnect{ReasonCode: 0})
 			if err != nil {
 				log.Fatalf("%s: error disconnecting: %v\n", id, err)
@@ -122,37 +133,35 @@ func runClient(dur time.Duration, id string, times chan<- timeStamp) {
 			}
 			return
 		default:
-			// lat := rand.Float64()
-			// long := rand.Float64()
-			//
-			// payload := make([]byte, 20)
-			// binary.BigEndian.PutUint32(payload[:4], pid)
-			// binary.BigEndian.PutUint64(payload[4:12], math.Float64bits(lat))
-			// binary.BigEndian.PutUint64(payload[12:], math.Float64bits(long))
-			//
-			// pub := &paho.Publish{
-			// 	Topic:   "test",
-			// 	QoS:     0,
-			// 	Payload: payload,
-			// }
-			//
-			// sendTime := time.Now()
-			// _, err := client.Publish(ctx, pub)
-			// if err != nil {
-			// 	log.Fatalf("%s: error publishing: %v\n", id, err)
-			// } else {
-			// 	log.Printf("%s: published message\n", id)
-			// }
-			//
-			// times <- timeStamp{
-			// 	t:     sendTime,
-			// 	eType: MsgSend,
-			// 	id:    pid,
-			// }
-			//
-			// pid++
-			//
-			time.Sleep(time.Second)
+			lat := rand.Float64()
+			long := rand.Float64()
+
+			payload := make([]byte, 20)
+			binary.BigEndian.PutUint32(payload[:4], pid)
+			binary.BigEndian.PutUint64(payload[4:12], math.Float64bits(lat))
+			binary.BigEndian.PutUint64(payload[12:], math.Float64bits(long))
+
+			pub := &paho.Publish{
+				Topic:   "test",
+				QoS:     0,
+				Payload: payload,
+			}
+
+			sendTime := time.Now()
+			_, err := client.Publish(ctx, pub)
+			if err != nil {
+				log.Fatalf("%s: error publishing: %v\n", id, err)
+			} else {
+				log.Printf("%s: published message\n", id)
+			}
+
+			times <- timeStamp{
+				t:     sendTime,
+				eType: MsgSend,
+				id:    pid,
+			}
+
+			pid++
 		}
 	}
 }
@@ -162,7 +171,6 @@ func collectStats(stamps <-chan timeStamp, resChan chan<- time.Duration) {
 	var avgLatency time.Duration
 	n := 0
 
-	log.Printf("starting stamp collection\n")
 	for stamp := range stamps {
 		switch stamp.eType {
 		case MsgSend:
@@ -174,7 +182,6 @@ func collectStats(stamps <-chan timeStamp, resChan chan<- time.Duration) {
 			delete(sents, stamp.id)
 		}
 	}
-	log.Printf("finishing stamp collection\n")
 
 	avgLatency /= time.Duration(n)
 

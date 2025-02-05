@@ -52,7 +52,6 @@ func (s *Server) Start() error {
 
 func (s *Server) handleClient(conn net.Conn) {
 	connect, _ := s.setupClient(conn)
-	log.Printf("%s: connected\n", connect.Id.String())
 
 	readChan := make(chan Packet, 100)
 	writeChan := make(chan []byte, 100)
@@ -67,7 +66,6 @@ func (s *Server) handleClient(conn net.Conn) {
 			clear(p.buf)
 			p.buf[0] = 0b11010000
 			p.buf[1] = 0
-			log.Printf("%s: sending ping resp\n", connect.Id.String())
 			writeChan <- p.buf[:2]
 		case packets.SUBSCRIBE:
 			props := packets.Properties{}
@@ -82,9 +80,8 @@ func (s *Server) handleClient(conn net.Conn) {
 			)
 			if err != nil {
 				log.Fatalf("%s: error decoding subscribe packet: %v\n", connect.Id.String(), err)
-			} else {
-				log.Printf("%s: decoded subscribe\n", connect.Id.String())
 			}
+
 			suback := packets.Suback{}
 			suback.Zero()
 
@@ -95,7 +92,7 @@ func (s *Server) handleClient(conn net.Conn) {
 					tribeChan,
 				)
 				if !ok {
-					go StartTribeManager(tribeChan)
+					go StartTribeManager(tribeChan, s.bp)
 				} else {
 					tribeChan = val.(chan TribeMsg)
 				}
@@ -130,13 +127,19 @@ func (s *Server) handleClient(conn net.Conn) {
 			pub := packets.Publish{}
 			pub.Zero()
 
-			packets.DecodePublish(
+			err := packets.DecodePublish(
 				p.fh,
 				&pub,
 				&props,
 				p.buf[offset:],
 			)
-
+			if err != nil {
+				log.Fatalf(
+					"%s: error decoding pub: %v\n",
+					connect.Id.String(),
+					err,
+				)
+			}
 			val, _ := s.tribes.Load(pub.Topic.String())
 			tribeChan := val.(chan TribeMsg)
 			tribeChan <- TribeMsg{
@@ -147,6 +150,7 @@ func (s *Server) handleClient(conn net.Conn) {
 				},
 			}
 		case packets.DISCONNECT:
+			log.Printf("%s: disconnected\n", connect.Id.String())
 			close(writeChan)
 			return
 		default:
@@ -159,51 +163,86 @@ func (s *Server) handleClient(conn net.Conn) {
 	}
 }
 
+// TODO: make all these errors graceful
 func (s *Server) readPump(conn net.Conn, send chan<- Packet, id string) {
+	buf := make([]byte, 1024)
+	accum := 0
+
+pump:
 	for {
-		fh := s.fp.GetFH()
-		buf := s.bp.GetBuf()
+		if accum >= 1024 {
+			log.Fatalf("ahh! read pump buf is too full\n")
+		}
 
-		n, err := conn.Read(buf)
+		// read some data into a buffer
+		n, err := conn.Read(buf[accum:])
 		if err != nil {
-			log.Fatalf("error reading from %s conn! %v\n", id, err)
+			log.Fatalf(
+				"%s: error reading from conn: %v\n",
+				id,
+				err,
+			)
 		}
-		offset := packets.DecodeFixedHeader(&fh, buf)
-		if offset == -1 {
-			log.Fatalf("error decoding fixed header from %s\n", id)
-		}
+		accum += n
 
-		for n < int(fh.RemLen)+offset {
-			// didn't read enough
-			b := s.bp.GetBuf()
-
-			nn, err := conn.Read(b)
-			if err != nil {
-				log.Fatalf(
-					"error reading from %s conn: %v\n",
-					id,
-					err,
-				)
+		// parse up all the packets from the buffer
+		for {
+			if accum < 2 {
+				// not enough data to read a fixed header
+				continue pump
 			}
 
-			buf = append(buf, b...)
-			n += nn
+			fh := s.fp.GetFH()
 
-			s.bp.ReturnBuf(b)
-		}
+			offset := packets.DecodeFixedHeader(
+				&fh,
+				buf,
+			)
+			if offset == -1 {
+				if accum > 5 {
+					// we have enough data for a full fixed header,
+					// so this is a true error
+					log.Fatalf(
+						"%s: error decoding fixed header\n",
+						id,
+					)
+				}
 
-		send <- Packet{fh: &fh, buf: buf[:n]}
+				// we might not have read enough
+				// for the full fixed header
+				s.fp.ReturnFH(fh)
+				continue pump
+			}
 
-		if fh.Pt == packets.DISCONNECT {
-			// TODO:
-			return
+			if offset+int(fh.RemLen) > accum {
+				// PERF: this means we're doing extra fh decoding
+				continue pump
+			}
+
+			b := s.bp.GetBuf()
+			nn := copy(b, buf[:offset+int(fh.RemLen)])
+			if nn < offset+int(fh.RemLen) {
+				b = append(b, buf[nn:offset+int(fh.RemLen)]...)
+			}
+
+			send <- Packet{
+				fh:  &fh,
+				buf: b[:offset+int(fh.RemLen)],
+			}
+
+			if fh.Pt == packets.DISCONNECT {
+				return
+			}
+
+			clear(buf[:offset+int(fh.RemLen)])
+			copy(buf, buf[offset+int(fh.RemLen):])
+			accum -= offset + int(fh.RemLen)
 		}
 	}
 }
 
 func (s *Server) writePump(conn net.Conn, recv <-chan []byte, id string) {
 	for buf := range recv {
-		log.Printf("%s: writing buf\n", id)
 		n, err := conn.Write(buf)
 		if err != nil {
 			log.Fatalf("error writting to %s conn: %v\n", id, err)

@@ -50,8 +50,6 @@ func DecodeProps(p *Properties, data []byte) int {
 	if offset == -1 {
 		return -1
 	}
-	log.Printf("l: %d\n", l)
-	log.Printf("offset: %d\n", offset)
 
 	end := offset + int(l)
 	for offset < end {
