@@ -36,8 +36,9 @@ func (t *TypicalUser) Run(ctx context.Context, wg *sync.WaitGroup) {
 				p paho.PublishReceived,
 			) (bool, error){
 				func(p paho.PublishReceived) (bool, error) {
+					time.Sleep(time.Millisecond)
 					ts := time.Now()
-					pid := string(p.Packet.Payload[:16])
+					pid := string(p.Packet.Payload[:36])
 					log.Info().
 						Str("id", t.Id).
 						Str("pid", pid).
@@ -74,7 +75,7 @@ func (t *TypicalUser) Run(ctx context.Context, wg *sync.WaitGroup) {
 				{
 					Topic:   "test",
 					QoS:     0,
-					NoLocal: false,
+					NoLocal: true,
 				},
 			},
 		},
@@ -105,14 +106,14 @@ func (t *TypicalUser) Run(ctx context.Context, wg *sync.WaitGroup) {
 			lat := rand.Float64()
 			long := rand.Float64()
 
-			payload := make([]byte, 32)
+			payload := make([]byte, 52)
 			copy(payload, pid)
 			binary.BigEndian.PutUint64(
-				payload[16:24],
+				payload[36:44],
 				math.Float64bits(lat),
 			)
 			binary.BigEndian.PutUint64(
-				payload[24:32],
+				payload[44:52],
 				math.Float64bits(long),
 			)
 			pub := &paho.Publish{

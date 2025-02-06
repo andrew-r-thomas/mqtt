@@ -113,8 +113,9 @@ func (s *Server) handleClient(conn net.Conn) {
 					ClientId: connect.Id.String(),
 					MsgData: AddMemberMsg{
 						Sender: Sender{
-							c:    writeChan,
-							live: &active,
+							c:       writeChan,
+							live:    &active,
+							noLocal: filter.NoLocal,
 						},
 					},
 				}

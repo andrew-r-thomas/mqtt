@@ -23,8 +23,9 @@ type SendMsgMsg struct {
 }
 
 type Sender struct {
-	c    chan<- []byte
-	live *atomic.Bool
+	c       chan<- []byte
+	live    *atomic.Bool
+	noLocal bool
 }
 
 func StartTribeManager(recv <-chan TribeMsg, bp *BufPool) {
@@ -37,9 +38,11 @@ func StartTribeManager(recv <-chan TribeMsg, bp *BufPool) {
 			senders[msg.ClientId] = msgData.Sender
 		case SendMsg:
 			msgData := msg.MsgData.(SendMsgMsg)
-			// TODO: figure out if we're going to send or not
 			for id, s := range senders {
 				if s.live.Load() {
+					if s.noLocal && id == msg.ClientId {
+						continue
+					}
 					b := bp.GetBuf()
 					n := copy(b, msgData.Data)
 					if n < len(msgData.Data) {

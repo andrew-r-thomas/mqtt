@@ -12,8 +12,8 @@ type Subscribe struct {
 }
 
 type TopicFilter struct {
-	Filter strings.Builder
-	Opts   byte
+	Filter  strings.Builder
+	NoLocal bool
 }
 
 var MalSubPacket = errors.New("Malformed subscribe packet")
@@ -36,7 +36,8 @@ func DecodeSubscribe(s *Subscribe, props *Properties, data []byte) error {
 		if off == -1 {
 			return MalSubPacket
 		}
-		tf.Opts = rest[offset+off]
+		opts := rest[offset+off]
+		tf.NoLocal = (opts & 0b00000100) != 0
 		s.TopicFilters = append(
 			s.TopicFilters,
 			tf,
