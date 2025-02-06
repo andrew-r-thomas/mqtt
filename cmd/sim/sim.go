@@ -16,6 +16,7 @@ const locFreq = time.Second
 const brokerAddr = ":1883"
 
 func main() {
+	zerolog.TimeFieldFormat = zerolog.TimeFormatUnixNano
 	logger := zerolog.New(os.Stdout)
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = logger.WithContext(ctx)

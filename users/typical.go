@@ -36,7 +36,6 @@ func (t *TypicalUser) Run(ctx context.Context, wg *sync.WaitGroup) {
 				p paho.PublishReceived,
 			) (bool, error){
 				func(p paho.PublishReceived) (bool, error) {
-					time.Sleep(time.Millisecond)
 					ts := time.Now()
 					pid := string(p.Packet.Payload[:36])
 					log.Info().
@@ -122,10 +121,11 @@ func (t *TypicalUser) Run(ctx context.Context, wg *sync.WaitGroup) {
 				Payload: payload,
 			}
 
+			ts := time.Now()
 			log.Info().
 				Str("id", t.Id).
 				Str("pid", pid).
-				Timestamp().
+				Time("time", ts).
 				Msg("publishing")
 			_, err := client.Publish(ctx, pub)
 			if err != nil {

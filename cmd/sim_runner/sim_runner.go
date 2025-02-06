@@ -12,11 +12,12 @@ import (
 )
 
 type LogRow struct {
-	Id    string    `json:"id"`
-	Pid   string    `json:"pid"`
-	Time  time.Time `json:"time"`
-	Msg   string    `json:"message"`
-	Level string    `json:"level"`
+	Id       string `json:"id"`
+	Pid      string `json:"pid"`
+	TimeUnix int64  `json:"time"`
+	Msg      string `json:"message"`
+	Level    string `json:"level"`
+	Time     time.Time
 }
 
 type LogWriter struct {
@@ -34,6 +35,7 @@ func (lw *LogWriter) Write(b []byte) (n int, err error) {
 		log.Printf("raw json: %s\n", l)
 		lr := LogRow{}
 		err = json.Unmarshal(l, &lr)
+		lr.Time = time.Unix(0, int64(lr.TimeUnix))
 		if err != nil {
 			log.Fatalf("error unmarshalling: %v\n", err)
 		}
