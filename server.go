@@ -4,7 +4,6 @@ import (
 	"log"
 	"net"
 	"sync"
-	"sync/atomic"
 
 	"github.com/andrew-r-thomas/mqtt/packets"
 )
@@ -15,8 +14,15 @@ type Server struct {
 	bp *BufPool
 	fp *FHPool
 
-	tribesLock sync.RWMutex
-	tribes     map[string]chan<- TribeMsg
+	clientsLock sync.RWMutex
+	clients     map[string]Client
+
+	topicLock sync.RWMutex
+	topicTrie TopicTrie
+}
+
+type Client struct {
+	writeChan chan<- []byte
 }
 
 const DefaultBufSize = 1024
@@ -25,16 +31,11 @@ func NewServer(addr string) Server {
 	bp := NewBufPool(100, DefaultBufSize)
 	fp := NewFHPool(100)
 
-	tribes := make(map[string]chan<- TribeMsg)
-
 	return Server{
 		addr: addr,
 
 		bp: &bp,
 		fp: &fp,
-
-		tribes:     tribes,
-		tribesLock: sync.RWMutex{},
 	}
 }
 
@@ -59,8 +60,6 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	readChan := make(chan Packet, 100)
 	writeChan := make(chan []byte, 100)
-	active := atomic.Bool{}
-	active.Store(true)
 	go s.readPump(conn, readChan, connect.Id.String())
 	go s.writePump(conn, writeChan, connect.Id.String())
 
@@ -94,39 +93,17 @@ func (s *Server) handleClient(conn net.Conn) {
 
 			suback := packets.Suback{}
 			suback.Zero()
+			suback.PacketId = sub.PackedId
 
 			for _, filter := range sub.TopicFilters {
-				s.tribesLock.RLock()
-				tribeChan, ok := s.tribes[filter.Filter.String()]
-				s.tribesLock.RUnlock()
-
-				if !ok {
-					tc := make(chan TribeMsg, 10)
-					go StartTribeManager(tc, s.bp)
-					s.tribesLock.Lock()
-					tribeChan = tc
-					s.tribes[filter.Filter.String()] = tribeChan
-					s.tribesLock.Unlock()
-				}
-				tribeChan <- TribeMsg{
-					MsgType:  AddMember,
-					ClientId: connect.Id.String(),
-					MsgData: AddMemberMsg{
-						Sender: Sender{
-							c:       writeChan,
-							live:    &active,
-							noLocal: filter.NoLocal,
-						},
-					},
-				}
 				suback.ReasonCodes = append(
 					suback.ReasonCodes, 0,
 				)
 			}
-			suback.PacketId = sub.PackedId
 
 			props.Zero()
 			clear(p.buf)
+
 			scratch := s.bp.GetBuf()
 			i := packets.EncodeSuback(
 				&suback,
@@ -156,19 +133,8 @@ func (s *Server) handleClient(conn net.Conn) {
 					err,
 				)
 			}
-			s.tribesLock.RLock()
-			tribeChan := s.tribes[pub.Topic.String()]
-			s.tribesLock.RUnlock()
-			tribeChan <- TribeMsg{
-				MsgType:  SendMsg,
-				ClientId: connect.Id.String(),
-				MsgData: SendMsgMsg{
-					Data: p.buf,
-				},
-			}
 		case packets.DISCONNECT:
 			log.Printf("%s: disconnected\n", connect.Id.String())
-			active.Store(false)
 			close(writeChan)
 			return
 		default:
