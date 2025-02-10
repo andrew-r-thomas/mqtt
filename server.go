@@ -3,21 +3,19 @@ package mqtt
 import (
 	"log"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/andrew-r-thomas/mqtt/packets"
 )
 
 type Server struct {
-	addr string
-
-	bp *BufPool
-	fp *FHPool
+	bp BufPool
+	fp FHPool
 
 	clientsLock sync.RWMutex
 	clients     map[string]Client
 
-	topicLock sync.RWMutex
 	topicTrie TopicTrie
 }
 
@@ -27,20 +25,23 @@ type Client struct {
 
 const DefaultBufSize = 1024
 
-func NewServer(addr string) Server {
+func NewServer() Server {
 	bp := NewBufPool(100, DefaultBufSize)
 	fp := NewFHPool(100)
 
 	return Server{
-		addr: addr,
+		bp: bp,
+		fp: fp,
 
-		bp: &bp,
-		fp: &fp,
+		clientsLock: sync.RWMutex{},
+		clients:     make(map[string]Client, 8),
+
+		topicTrie: NewTopicTrie(),
 	}
 }
 
-func (s *Server) Start() error {
-	listener, err := net.Listen("tcp", s.addr)
+func (s *Server) Start(addr string) error {
+	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return err
 	}
@@ -60,6 +61,13 @@ func (s *Server) handleClient(conn net.Conn) {
 
 	readChan := make(chan Packet, 100)
 	writeChan := make(chan []byte, 100)
+
+	s.clientsLock.Lock()
+	s.clients[connect.Id.String()] = Client{
+		writeChan: writeChan,
+	}
+	s.clientsLock.Unlock()
+
 	go s.readPump(conn, readChan, connect.Id.String())
 	go s.writePump(conn, writeChan, connect.Id.String())
 
@@ -73,6 +81,7 @@ func (s *Server) handleClient(conn net.Conn) {
 			p.buf[1] = 0
 			writeChan <- p.buf[:2]
 		case packets.SUBSCRIBE:
+			log.Printf("got sub\n")
 			props := packets.Properties{}
 			props.Zero()
 			sub := packets.Subscribe{}
@@ -96,6 +105,9 @@ func (s *Server) handleClient(conn net.Conn) {
 			suback.PacketId = sub.PackedId
 
 			for _, filter := range sub.TopicFilters {
+				// TODO: filter cleaning
+				sub := strings.Split(filter.Filter.String(), "/")
+				s.topicTrie.AddSubscription(sub, connect.Id.String())
 				suback.ReasonCodes = append(
 					suback.ReasonCodes, 0,
 				)
@@ -115,6 +127,7 @@ func (s *Server) handleClient(conn net.Conn) {
 
 			writeChan <- p.buf[:i]
 		case packets.PUBLISH:
+			log.Printf("got pub\n")
 			props := packets.Properties{}
 			props.Zero()
 			pub := packets.Publish{}
@@ -133,9 +146,30 @@ func (s *Server) handleClient(conn net.Conn) {
 					err,
 				)
 			}
+			// TODO: topic cleaning
+			topic := strings.Split(pub.Topic.String(), "/")
+			matches := s.topicTrie.FindMatches(topic)
+			s.clientsLock.RLock()
+			for _, match := range matches {
+				log.Printf("sending pub to %s\n", match)
+				s.clients[match].writeChan <- p.buf
+			}
+			s.clientsLock.RUnlock()
 		case packets.DISCONNECT:
 			log.Printf("%s: disconnected\n", connect.Id.String())
+
+			// remove subs
+			s.topicTrie.RemoveSubs(connect.Id.String())
+
+			// remove from clients
+			s.clientsLock.Lock()
+			delete(s.clients, connect.Id.String())
+			s.clientsLock.Unlock()
+
+			// stop writePump
 			close(writeChan)
+
+			// yeet on outa here
 			return
 		default:
 			log.Fatalf(

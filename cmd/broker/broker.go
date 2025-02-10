@@ -9,7 +9,7 @@ import (
 const addr = ":1883"
 
 func main() {
-	s := mqtt.NewServer(addr)
-	err := s.Start()
+	s := mqtt.NewServer()
+	err := s.Start(addr)
 	fmt.Printf("broker stopped: %v\n", err)
 }
