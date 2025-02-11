@@ -1,30 +1,38 @@
 package mqtt
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/andrew-r-thomas/mqtt/packets"
 )
+
+const KB = 1024
+const MB = 1024 * KB
+const DefaultBufSize = KB
 
 type Server struct {
 	bp BufPool
 	fp FHPool
 
 	clientsLock sync.RWMutex
-	clients     map[string]Client
+	clients     map[string]Session
 
 	topicTrie TopicTrie
+
+	maxPacketSize int
+	connDeadline  time.Duration
+
+	ctx context.Context
 }
 
-type Client struct {
-	writeChan chan<- []byte
-}
-
-const DefaultBufSize = 1024
-
+// TODO: instantiate from persistent storage
 func NewServer() Server {
 	bp := NewBufPool(100, DefaultBufSize)
 	fp := NewFHPool(100)
@@ -34,9 +42,11 @@ func NewServer() Server {
 		fp: fp,
 
 		clientsLock: sync.RWMutex{},
-		clients:     make(map[string]Client, 8),
+		clients:     make(map[string]Session, 8),
 
 		topicTrie: NewTopicTrie(),
+
+		maxPacketSize: 4 * KB,
 	}
 }
 
@@ -52,24 +62,65 @@ func (s *Server) Start(addr string) error {
 			return err
 		}
 
-		go s.handleClient(conn)
+		go s.handleConn(conn)
 	}
 }
 
-func (s *Server) handleClient(conn net.Conn) {
-	connect, _ := s.setupClient(conn)
+func (s *Server) handleConn(conn net.Conn) {
+	// wait for connect packet
+	conn.SetDeadline(time.Now().Add(time.Second))
+	buf := s.bp.GetBuf()
+	n, err := conn.Read(buf)
+	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+		} else {
+			log.Fatalf(
+				"unexpected error setting up conn: %v\n",
+				err,
+			)
+		}
+	}
+	// TODO: read until n is enough for fixedheader len
+	fh := s.fp.GetFH()
+	off := packets.DecodeFixedHeader(&fh, buf)
+	if off == -1 {
+		// TODO:
+		log.Fatalf("error decoding fixed header\n")
+	}
+	for n < off+int(fh.RemLen) {
+		// TODO: validate that the len isnt crazy
+		b := s.bp.GetBuf()
+		nn, err := conn.Read(b)
+		if err != nil {
+			// TODO:
+		}
+		buf = append(buf, b...)
+		s.bp.ReturnBuf(b)
+		n += nn
+	}
 
+	ctx, cancel := context.WithCancel(s.ctx)
 	readChan := make(chan Packet, 100)
 	writeChan := make(chan []byte, 100)
 
-	s.clientsLock.Lock()
-	s.clients[connect.Id.String()] = Client{
-		writeChan: writeChan,
-	}
-	s.clientsLock.Unlock()
+	go s.readPump(conn, ctx, readChan)
+	go s.writePump(conn, ctx, writeChan)
 
-	go s.readPump(conn, readChan, connect.Id.String())
-	go s.writePump(conn, writeChan, connect.Id.String())
+	select {
+	case packet := <-readChan:
+		if packet.fh.Pt != packets.CONNECT {
+			// TODO:
+		}
+		// TODO: do all the setup stuff
+	case <-time.After(time.Second):
+		cancel()
+		return
+	}
+	// s.clientsLock.Lock()
+	// s.clients[connect.Id.String()] = Session{
+	// 	writeChan: writeChan,
+	// }
+	// s.clientsLock.Unlock()
 
 	for p := range readChan {
 		offset := len(p.buf) - int(p.fh.RemLen)
@@ -182,93 +233,104 @@ func (s *Server) handleClient(conn net.Conn) {
 }
 
 // TODO: make all these errors graceful
-func (s *Server) readPump(conn net.Conn, send chan<- Packet, id string) {
-	buf := make([]byte, 1024)
+func (s *Server) readPump(
+	conn net.Conn,
+	ctx context.Context,
+	send chan<- Packet,
+) {
+	buf := make([]byte, s.maxPacketSize)
 	accum := 0
 
 pump:
 	for {
-		if accum >= 1024 {
-			log.Fatalf("ahh! read pump buf is too full\n")
-		}
-
-		// read some data into a buffer
-		n, err := conn.Read(buf[accum:])
-		if err != nil {
-			log.Fatalf(
-				"%s: error reading from conn: %v\n",
-				id,
-				err,
-			)
-		}
-		accum += n
-
-		// parse up all the packets from the buffer
-		for {
-			if accum < 2 {
-				// not enough data to read a fixed header
-				continue pump
+		select {
+		case <-ctx.Done():
+			close(send)
+			return
+		default:
+			// read some data into a buffer
+			n, err := conn.Read(buf[accum:])
+			if err != nil {
+				log.Fatalf(
+					"error reading from conn: %v\n",
+					err,
+				)
 			}
+			accum += n
 
-			fh := s.fp.GetFH()
+			// parse up all the packets from the buffer
+			for {
+				if accum < 2 {
+					// not enough data to read a fixed header
+					continue pump
+				}
 
-			offset := packets.DecodeFixedHeader(
-				&fh,
-				buf,
-			)
-			if offset == -1 {
-				if accum > 5 {
-					// we have enough data for a full fixed header,
-					// so this is a true error
-					log.Fatalf(
-						"%s: error decoding fixed header\n",
-						id,
+				fh := s.fp.GetFH()
+
+				offset := packets.DecodeFixedHeader(
+					&fh,
+					buf,
+				)
+				if offset == -1 {
+					if accum > 5 {
+						// we have enough data for a full fixed header,
+						// so this is a true error
+						log.Fatalf(
+							"error decoding fixed header\n",
+						)
+					}
+
+					// we might not have read enough
+					// for the full fixed header
+					s.fp.ReturnFH(fh)
+					continue pump
+				}
+
+				if offset+int(fh.RemLen) > accum {
+					// PERF: this means we're doing extra fh decoding
+					continue pump
+				}
+
+				b := s.bp.GetBuf()
+				nn := copy(b, buf[:offset+int(fh.RemLen)])
+				if nn < offset+int(fh.RemLen) {
+					b = append(
+						b,
+						buf[nn:offset+int(fh.RemLen)]...,
 					)
 				}
 
-				// we might not have read enough
-				// for the full fixed header
-				s.fp.ReturnFH(fh)
-				continue pump
-			}
+				send <- Packet{
+					fh:  &fh,
+					buf: b[:offset+int(fh.RemLen)],
+				}
 
-			if offset+int(fh.RemLen) > accum {
-				// PERF: this means we're doing extra fh decoding
-				continue pump
+				clear(buf[:offset+int(fh.RemLen)])
+				copy(buf, buf[offset+int(fh.RemLen):])
+				accum -= offset + int(fh.RemLen)
 			}
-
-			b := s.bp.GetBuf()
-			nn := copy(b, buf[:offset+int(fh.RemLen)])
-			if nn < offset+int(fh.RemLen) {
-				b = append(b, buf[nn:offset+int(fh.RemLen)]...)
-			}
-
-			send <- Packet{
-				fh:  &fh,
-				buf: b[:offset+int(fh.RemLen)],
-			}
-
-			if fh.Pt == packets.DISCONNECT {
-				return
-			}
-
-			clear(buf[:offset+int(fh.RemLen)])
-			copy(buf, buf[offset+int(fh.RemLen):])
-			accum -= offset + int(fh.RemLen)
 		}
 	}
 }
 
-func (s *Server) writePump(conn net.Conn, recv <-chan []byte, id string) {
-	for buf := range recv {
-		n, err := conn.Write(buf)
-		if err != nil {
-			log.Fatalf("error writting to %s conn: %v\n", id, err)
+func (s *Server) writePump(
+	conn net.Conn,
+	ctx context.Context,
+	recv <-chan []byte,
+) {
+	for {
+		select {
+		case <-ctx.Done():
+		case buf := <-recv:
+			n, err := conn.Write(buf)
+			if err != nil {
+				log.Fatalf("error writting to conn: %v\n", err)
+			}
+			if n != len(buf) {
+				log.Fatalf("did not write full buf\n")
+			}
+			s.bp.ReturnBuf(buf)
 		}
-		if n != len(buf) {
-			log.Fatalf("did not write full buf to %s\n", id)
-		}
-		s.bp.ReturnBuf(buf)
 	}
 }
 
@@ -342,4 +404,12 @@ func (s *Server) setupClient(
 type Packet struct {
 	fh  *packets.FixedHeader
 	buf []byte // this is the whole buffer, including the fixed header
+}
+
+type Session struct {
+	pendingMsgs [][]byte
+	unackMsgs   [][]byte
+	willMsg     []byte
+	willDelay   uint32
+	sessionEnd  time.Time
 }
