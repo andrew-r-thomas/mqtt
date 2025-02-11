@@ -29,6 +29,8 @@ type Server struct {
 	maxPacketSize int
 	connDeadline  time.Duration
 
+	wg sync.WaitGroup
+
 	ctx context.Context
 }
 
